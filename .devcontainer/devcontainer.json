@@ -1,0 +1,84 @@
+{
+  "name": "Dev Environment",
+  "image": "mcr.microsoft.com/devcontainers/base:ubuntu-24.04",
+
+  // common-utils and git are already baked into the base image — no need to
+  // re-add them as features.
+  //
+  // docker-outside-of-docker: the container gets the docker CLI and talks to
+  // the VM's daemon through the mounted socket (see runArgs). With DevPod on
+  // the VM this yields sibling containers sharing one daemon and build cache,
+  // and requires no privileged mode. The VM is the isolation boundary anyway.
+  // If a container ever must be fully self-contained, swap in
+  // "ghcr.io/devcontainers/features/docker-in-docker:2", drop the socket
+  // mount below, and add "--privileged" to runArgs.
+  "features": {
+    "ghcr.io/devcontainers/features/docker-outside-of-docker:1": {
+      "version": "latest"
+    }
+  },
+  "runArgs": ["--volume=/var/run/docker.sock:/var/run/docker.sock"],
+
+  "postCreateCommand": "bash .devcontainer/post-create.sh",
+
+  // Make mise shims and pnpm global bins visible to non-interactive shells
+  // (VS Code tasks, debuggers, extension language servers); interactive bash
+  // additionally gets `mise activate` + PNPM_HOME via .bashrc from setup-mise.sh.
+  "remoteEnv": {
+    "PNPM_HOME": "/home/vscode/.local/share/pnpm",
+    "PATH": "${containerEnv:PATH}:/home/vscode/.local/bin:/home/vscode/.local/share/mise/shims:/home/vscode/.local/share/pnpm"
+  },
+
+  // One global VS Code install lives on the VM; these extensions are
+  // installed into the container's VS Code server automatically on attach
+  // (DevPod honours this section).
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        // AI
+        "kilocode.kilo-code",
+        // Python
+        "ms-python.python",
+        "ms-python.vscode-pylance",
+        "ms-python.debugpy",
+        "ms-python.vscode-python-envs",
+        "charliermarsh.ruff",
+        "njpwerner.autodocstring",
+        // JS/TS
+        "dbaeumer.vscode-eslint",
+        "esbenp.prettier-vscode",
+        "dsznajder.es7-react-js-snippets",
+        // Go / Rust
+        "golang.go",
+        "rust-lang.rust-analyzer",
+        // Notebooks / testing
+        "ms-toolsai.jupyter",
+        "ms-toolsai.jupyter-keymap",
+        "ms-toolsai.jupyter-renderers",
+        "ms-toolsai.vscode-jupyter-cell-tags",
+        "ms-toolsai.vscode-jupyter-slideshow",
+        "ms-playwright.playwright",
+        // Infra / containers
+        // docker.docker = Docker DX language smarts; vscode-containers = explorer UI
+        "docker.docker",
+        "ms-azuretools.vscode-containers",
+        "ms-kubernetes-tools.vscode-kubernetes-tools",
+        "hashicorp.terraform",
+        "ms-azuretools.vscode-azureterraform",
+        "redhat.vscode-yaml",
+        // Git / misc
+        "eamodio.gitlens",
+        "redhat.fabric8-analytics"
+      ]
+    }
+  },
+
+  // NOTE: `dotfiles` is not a valid devcontainer.json property — removed.
+  // DevPod applies dotfiles natively; set once on the VM:
+  //   devpod context set-options \
+  //     -o DOTFILES_URL=https://github.com/<you>/dotfiles \
+  //     -o DOTFILES_SCRIPT=install.sh
+
+  "forwardPorts": [3000, 8080, 8443],
+  "remoteUser": "vscode"
+}
