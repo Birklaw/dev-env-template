@@ -39,7 +39,7 @@ sudo sh -c 'echo -e "[code]\nname=Visual Studio Code\nbaseurl=https://packages.m
 sudo dnf install -y code
 
 # ---------- mise + shared toolset (same as inside containers) ----------
-bash "$REPO_ROOT/setup-mise.sh"
+bash "$REPO_ROOT/template/setup-mise.sh"
 
 echo "==> VM bootstrap complete."
 echo "    Log out/in for docker group membership, then:"
