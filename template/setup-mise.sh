@@ -62,19 +62,14 @@ fi
 export PNPM_HOME="$HOME/.local/share/pnpm"
 export PATH="$PNPM_HOME:$PATH"
 
-# ---------- agent CLIs (curl installers, not mise) ----------
-# herdr: static binary -> ~/.local/bin, self-updates via 'herdr update'
-if ! command -v herdr &>/dev/null; then
-  echo "==> Installing herdr..."
-  curl -fsSL https://herdr.dev/install.sh | sh
-fi
-
-# pi: curl installer uses npm under the hood, so it must come after the mise
-# toolset above (node needs to be on PATH).
-if ! command -v pi &>/dev/null; then
-  echo "==> Installing pi..."
-  curl -fsSL https://pi.dev/install.sh | sh
-fi
+# ---------- agent CLIs (mise-managed) ----------
+# herdr: aqua backend (checksums + GitHub artifact attestations).
+# pi: npm package (@earendil-works/pi-coding-agent, binary: pi) — mise's npm
+# backend needs node, which the toolset above provides. Pi's docs state
+# install scripts aren't required, so mise's --ignore-scripts default is fine.
+mise use -g \
+  herdr@latest \
+  "npm:@earendil-works/pi-coding-agent"
 
 echo "==> mise toolset installed:"
 mise ls
