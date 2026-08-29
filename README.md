@@ -38,7 +38,8 @@ Installs: git/curl/gh, libatomic (if missing), Docker, DevPod CLI, VS Code +
 Dev Containers extension, dotfiles defaults for DevPod, and the mise toolchain
 (via `template/setup-mise.sh`).
 
-**Then start a new shell** (or log out/in) so docker group membership applies.
+**Then reboot** (a fresh login is often enough, but a reboot is the reliable
+way to get docker group membership picked up everywhere).
 
 ## 3. Start a new project
 
@@ -90,8 +91,12 @@ container, dotfiles, and mise toolchain.
 
 - **mise is the only tool manager.** Global tools: `mise use -g <tool>`.
   Project overrides: `mise.toml` in the project root. Refresh: `mise upgrade`.
-- **Docker runs on the VM.** Containers use docker-outside-of-docker (sibling
-  containers sharing the host daemon and build cache, no privileged mode).
+  Global installs are isolated from project config (`setup-mise.sh` runs from
+  `$HOME`), so a project's pins can never break the base toolchain.
+- **Docker runs on the VM.** Containers use docker-outside-of-docker: the
+  feature mounts the host socket to `/var/run/docker-host.sock` and proxies a
+  permission-fixed `/var/run/docker.sock` (sibling containers, shared build
+  cache, no privileged mode). Don't add your own socket mount.
 - **Dotfiles** are applied by DevPod to every workspace. Change with:
   `devpod context set-options -o DOTFILES_URL=... -o DOTFILES_SCRIPT=...`
 - **GitHub auth inside containers:** run `gh auth login` on the VM once and

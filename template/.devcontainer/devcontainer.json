@@ -6,18 +6,20 @@
   // re-add them as features.
   //
   // docker-outside-of-docker: the container gets the docker CLI and talks to
-  // the VM's daemon through the mounted socket (see runArgs). With DevPod on
-  // the VM this yields sibling containers sharing one daemon and build cache,
-  // and requires no privileged mode. The VM is the isolation boundary anyway.
-  // If a container ever must be fully self-contained, swap in
-  // "ghcr.io/devcontainers/features/docker-in-docker:2", drop the socket
-  // mount below, and add "--privileged" to runArgs.
+  // the VM's daemon. IMPORTANT: do NOT add a runArgs/mounts entry for
+  // /var/run/docker.sock — the feature mounts the host socket itself at
+  // /var/run/docker-host.sock and runs a socat proxy that creates a
+  // permission-fixed /var/run/docker.sock. A manual mount collides with the
+  // proxy. With DevPod on the VM this yields sibling containers sharing one
+  // daemon and build cache, and requires no privileged mode. The VM is the
+  // isolation boundary anyway. If a container ever must be fully
+  // self-contained, swap in "ghcr.io/devcontainers/features/docker-in-docker:2"
+  // and add "--privileged" to runArgs.
   "features": {
     "ghcr.io/devcontainers/features/docker-outside-of-docker:1": {
       "version": "latest"
     }
   },
-  "runArgs": ["--volume=/var/run/docker.sock:/var/run/docker.sock"],
 
   "postCreateCommand": "bash .devcontainer/post-create.sh",
 
@@ -79,6 +81,9 @@
   //     -o DOTFILES_URL=https://github.com/<you>/dotfiles \
   //     -o DOTFILES_SCRIPT=install.sh
 
-  "forwardPorts": [3000, 8080, 8443],
+  // No static forwardPorts: VS Code auto-forwards ports when a service starts
+  // listening in the container (see the PORTS panel). Static entries only add
+  // collision risk between multiple workspaces. If an external tool ever needs
+  // a port before anything listens, add it per-project, not in the template.
   "remoteUser": "vscode"
 }

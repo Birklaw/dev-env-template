@@ -26,6 +26,14 @@ eval "$(~/.local/bin/mise activate bash)"
 # Shorthands resolve via the mise registry (core/aqua backends: precompiled,
 # checksum-verified). Bump these intentionally; 'mise upgrade' refreshes the
 # ones pinned to latest.
+#
+# Run from $HOME, not the caller's cwd: when invoked from a project directory
+# (e.g. .devcontainer/post-create.sh), mise would otherwise resolve the
+# *project's* mise.toml pins while installing the tools below. The global
+# toolset must be independent of any project config — project pins are
+# applied afterwards by the project's own mise.toml (post-create.sh).
+cd "$HOME"
+
 mise use -g \
   node@lts \
   python@3.14 \
@@ -37,9 +45,12 @@ mise use -g \
   k9s@latest \
   terraform@latest
 
-# Use pnpm as the installer for mise's npm: backend (persisted in
-# ~/.config/mise/config.toml, applies to all future npm:* tools).
-mise settings set npm.package_manager pnpm
+# Keep mise's npm backend on npm (the default). It ships with the node mise
+# installs, so it's always version-matched. Overriding it (e.g. pnpm) couples
+# every npm:* tool install to that package manager's CLI surface — pnpm 12
+# removed flags mise passes (pnpm/pnpm#14281) and broke installs. pnpm itself
+# stays in the toolset above for daily use.
+mise settings set npm.package_manager npm
 
 # pnpm global bin dir for ad-hoc 'pnpm add -g <pkg>' installs (idempotent).
 if ! grep -q 'PNPM_HOME' ~/.bashrc 2>/dev/null; then
@@ -51,7 +62,7 @@ fi
 export PNPM_HOME="$HOME/.local/share/pnpm"
 export PATH="$PNPM_HOME:$PATH"
 
-# ---------- Kilo CLI (npm package, mise-managed, installed via pnpm) ----------
+# ---------- Kilo CLI (npm package, mise-managed) ----------
 # Installs the 'kilo' binary; stays tracked in 'mise ls' / 'mise upgrade'.
 # For one-off global npm packages outside mise: pnpm add -g <pkg>
 mise use -g "npm:@kilocode/cli"
