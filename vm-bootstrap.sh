@@ -69,5 +69,5 @@ code --install-extension ms-vscode-remote.remote-containers
 bash "$REPO_ROOT/template/setup-mise.sh"
 
 echo "==> VM bootstrap complete."
-echo "    Start a new shell (or log out/in) for docker group membership, then:"
+echo "    Reboot (or log out/in) so docker group membership applies, then:"
 echo "      devpod up <path-or-git-url> --ide vscode"
