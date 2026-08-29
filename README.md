@@ -3,8 +3,8 @@
 Bootstrap a fresh Fedora VM into a dev environment: Docker + DevPod + VS Code
 on the host, per-project devcontainers built from `template/`, and a shared
 mise-managed toolchain (node, python, go, uv, pnpm, kubectl, helm, k9s,
-terraform, Kilo CLI) installed identically on the VM and inside every
-container.
+terraform) plus agent CLIs (herdr, pi) installed identically on the VM and
+inside every container.
 
 ## Prerequisites
 
@@ -36,7 +36,7 @@ cd dev-env-template
 
 Installs: git/curl/gh, libatomic (if missing), Docker, DevPod CLI, VS Code +
 Dev Containers extension, dotfiles defaults for DevPod, and the mise toolchain
-(via `template/setup-mise.sh`).
++ agent CLIs (via `template/setup-mise.sh`).
 
 **Then reboot** (a fresh login is often enough, but a reboot is the reliable
 way to get docker group membership picked up everywhere).

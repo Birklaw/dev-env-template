@@ -62,10 +62,19 @@ fi
 export PNPM_HOME="$HOME/.local/share/pnpm"
 export PATH="$PNPM_HOME:$PATH"
 
-# ---------- Kilo CLI (npm package, mise-managed) ----------
-# Installs the 'kilo' binary; stays tracked in 'mise ls' / 'mise upgrade'.
-# For one-off global npm packages outside mise: pnpm add -g <pkg>
-mise use -g "npm:@kilocode/cli"
+# ---------- agent CLIs (curl installers, not mise) ----------
+# herdr: static binary -> ~/.local/bin, self-updates via 'herdr update'
+if ! command -v herdr &>/dev/null; then
+  echo "==> Installing herdr..."
+  curl -fsSL https://herdr.dev/install.sh | sh
+fi
+
+# pi: curl installer uses npm under the hood, so it must come after the mise
+# toolset above (node needs to be on PATH).
+if ! command -v pi &>/dev/null; then
+  echo "==> Installing pi..."
+  curl -fsSL https://pi.dev/install.sh | sh
+fi
 
 echo "==> mise toolset installed:"
 mise ls
