@@ -8,7 +8,7 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # ---------- system packages ----------
-sudo dnf install -y git curl
+sudo dnf install -y git curl gh
 
 # ---------- system libs for native Node.js / pnpm binaries ----------
 # Some ARM Fedora images (especially aarch64 on cloud/edge devices) strip
@@ -69,5 +69,5 @@ code --install-extension ms-vscode-remote.remote-containers
 bash "$REPO_ROOT/template/setup-mise.sh"
 
 echo "==> VM bootstrap complete."
-echo "    Log out/in for docker group membership, then:"
+echo "    Start a new shell (or log out/in) for docker group membership, then:"
 echo "      devpod up <path-or-git-url> --ide vscode"
