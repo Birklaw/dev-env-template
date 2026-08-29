@@ -79,6 +79,44 @@ VM's toolchain, not the container's. Always attach via `--ide vscode` (or
 terminal runs inside the container, and `devpod ssh` sessions share the same
 container, dotfiles, and mise toolchain.
 
+## What happens on `devpod up`
+
+Understanding the sequence makes the moving parts easy to debug:
+
+1. **Build** — Docker builds an image from `.devcontainer/devcontainer.json`
+   (base image + features, e.g. the docker-outside-of-docker CLI). Cached
+   after the first run; rebuilt only when the config changes or you pass
+   `--recreate`.
+2. **Container start** — the project directory is bind-mounted in, so your
+   files live on the VM and are shared by every session (VS Code, `devpod
+   ssh`) that touches this workspace.
+3. **`postCreateCommand`** — runs `.devcontainer/post-create.sh` inside the
+   container: installs `libatomic1` if needed, runs `setup-mise.sh` (mise +
+   global toolchain, isolated from project config), then applies your
+   project's `mise.toml` pins if present. This is the slow step on first
+   creation (~1–2 min); it does not re-run on subsequent starts.
+4. **Dotfiles** — DevPod clones your dotfiles repo *inside the container* and
+   runs the configured install script. The repo must be cloneable without
+   host credentials (public HTTPS, or SSH with agent forwarding).
+5. **IDE attach** (`--ide vscode` only) — DevPod launches the VM's VS Code,
+   the Dev Containers extension connects to the container, and the extension
+   list from `devcontainer.json` is installed into the container's VS Code
+   server in the background.
+
+### Lifecycle
+
+```bash
+devpod up my-project            # start (idempotent; reuses existing container)
+devpod stop my-project          # stop, keep container + its state
+devpod up ... --recreate        # rebuild after changing .devcontainer/
+devpod delete my-project        # remove container entirely (project files
+                                # survive — they're the mounted VM directory)
+```
+
+Container-local state (installed tools, dotfiles symlinks, anything outside
+the project dir) is rebuilt by `post-create.sh` + dotfiles on recreation, so
+`delete` + `up` is always a safe reset.
+
 ## Layout
 
 | Path | Purpose |
@@ -99,5 +137,8 @@ container, dotfiles, and mise toolchain.
   cache, no privileged mode). Don't add your own socket mount.
 - **Dotfiles** are applied by DevPod to every workspace. Change with:
   `devpod context set-options -o DOTFILES_URL=... -o DOTFILES_SCRIPT=...`
-- **GitHub auth inside containers:** run `gh auth login` on the VM once and
-  `gh auth setup-git`; DevPod forwards git/SSH into workspaces.
+- **GitHub auth inside containers:** `gh auth login` on the VM does **not**
+  propagate into devcontainers. Git over SSH works via agent forwarding
+  (`ssh-add` your key on the VM); for HTTPS/`gh` inside a container, run
+  `gh auth login` there once (auth persists in the container's home until
+  recreation).
