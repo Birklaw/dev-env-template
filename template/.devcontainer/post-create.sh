@@ -3,13 +3,26 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-# ---------- system libs (fix libatomic for Node.js / pnpm binaries) ----------
-# Minimal devcontainer base images strip libatomic, causing cryptic
-# "libatomic.so.1: cannot open shared object file" errors on pnpm/npm.
+# ---------- system packages ----------
+# DEBIAN_FRONTEND=noninteractive: post-create runs without a TTY; without it
+# debconf spams "unable to initialize frontend" warnings and some packages
+# can hang waiting for input.
+APT="sudo DEBIAN_FRONTEND=noninteractive apt-get"
+
+# libatomic1: minimal devcontainer base images strip libatomic, causing
+# cryptic "libatomic.so.1: cannot open shared object file" errors on pnpm/npm.
 if ! ldconfig -p 2>/dev/null | grep -q libatomic.so.1; then
   echo "==> Installing libatomic1..."
-  sudo apt-get update -qq
-  sudo apt-get install -y -qq libatomic1
+  $APT update -qq
+  $APT install -y -qq libatomic1
+fi
+
+# vim: the base image ships vim-tiny only (as vim.tiny, not even on PATH) —
+# install the full vim.
+if ! command -v vim &>/dev/null; then
+  echo "==> Installing vim..."
+  $APT update -qq
+  $APT install -y -qq vim
 fi
 
 # ---------- base toolchain (mise + global tools) ----------

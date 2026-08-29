@@ -8,7 +8,7 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # ---------- system packages ----------
-sudo dnf install -y git curl gh
+sudo dnf install -y git curl gh vim-enhanced
 
 # ---------- system libs for native Node.js / pnpm binaries ----------
 # Some ARM Fedora images (especially aarch64 on cloud/edge devices) strip
