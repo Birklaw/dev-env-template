@@ -16,11 +16,16 @@ if ! command -v mise &>/dev/null; then
 fi
 export PATH="$HOME/.local/bin:$PATH"
 
+# Resolve the actual mise binary — it may have been preinstalled via another
+# channel (dnf, manual) and NOT live at ~/.local/bin/mise. Using the resolved
+# path keeps the .bashrc activation and the eval below correct either way.
+MISE_BIN="$(command -v mise)"
+
 # Shell activation for interactive bash sessions (idempotent).
 if ! grep -q 'mise activate bash' ~/.bashrc 2>/dev/null; then
-  echo 'eval "$(~/.local/bin/mise activate bash)"' >> ~/.bashrc
+  echo "eval \"\$($MISE_BIN activate bash)\"" >> ~/.bashrc
 fi
-eval "$(~/.local/bin/mise activate bash)"
+eval "$("$MISE_BIN" activate bash)"
 
 # ---------- global toolset ----------
 # Shorthands resolve via the mise registry (core/aqua backends: precompiled,
