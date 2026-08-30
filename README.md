@@ -6,6 +6,12 @@ mise-managed toolchain (node, python, go, uv, pnpm, kubectl, helm, k9s,
 terraform) plus agent CLIs (herdr, pi) installed identically on the VM and
 inside every container.
 
+Editing is **terminal-first with LazyVim (Neovim)**: `neovim`, `lazygit`,
+`ripgrep`, `fd`, `fzf` and `tree-sitter` are mise-managed like everything
+else, and the LazyVim config ships via the dotfiles repo into every
+container. VS Code remains installed on the VM as a fallback (Jupyter, GUI
+debugging) — attach it per-project with `devpod up --ide vscode`.
+
 ## Prerequisites
 
 - Fedora VM (x86_64 or aarch64), with sudo
@@ -35,8 +41,10 @@ cd dev-env-template
 ```
 
 Installs: git/curl/gh, libatomic (if missing), Docker, DevPod CLI, VS Code +
-Dev Containers extension, dotfiles defaults for DevPod, and the mise toolchain
-+ agent CLIs (via `template/setup-mise.sh`).
+Dev Containers extension, Nerd Font symbols (pinned + hash-verified,
+fontconfig fallback so the terminal font itself doesn't change), dotfiles
+defaults for DevPod, and the mise toolchain + agent CLIs (via
+`template/setup-mise.sh`).
 
 **Then reboot** (a fresh login is often enough, but a reboot is the reliable
 way to get docker group membership picked up everywhere).
@@ -60,24 +68,30 @@ python = "3.12"
 ## 4. Spin up the devcontainer
 
 ```bash
-devpod up ~/my-project --ide vscode
+devpod up ~/my-project               # terminal-first: no IDE flag needed
 ```
 
 First run takes a few minutes (pulls the base image, installs the toolchain).
 
-Terminal-first daily flow:
+Terminal-first daily flow (LazyVim):
 
 ```bash
 devpod up ~/my-project               # start container (idempotent)
-devpod up ~/my-project --ide vscode  # attach VS Code to it
-devpod ssh my-project                # shell into the container from any terminal
+devpod ssh my-project                # shell into the container
+nvim .                               # LazyVim: LSP, fuzzy-find, git, debug
+```
+
+VS Code remains available as a fallback (Jupyter notebooks, GUI debugging):
+
+```bash
+devpod up ~/my-project --ide vscode  # attach VS Code to the container
 ```
 
 Note: plain `code ~/my-project` opens the folder *locally* — you'd get the
 VM's toolchain, not the container's. Always attach via `--ide vscode` (or
 "Dev Containers: Attach" from VS Code). Once attached, VS Code's integrated
 terminal runs inside the container, and `devpod ssh` sessions share the same
-container, dotfiles, and mise toolchain.
+container, dotfiles, mise toolchain, and LazyVim config.
 
 ## What happens on `devpod up`
 
@@ -127,6 +141,25 @@ the project dir) is rebuilt by `post-create.sh` + dotfiles on recreation, so
 
 ## Notes
 
+- **LazyVim is the primary editor; VS Code is the fallback.** Neovim +
+  `lazygit`/`ripgrep`/`fd`/`fzf`/`tree-sitter` come from the shared mise
+  toolchain (identical on VM and in containers). The LazyVim config lives in
+  the dotfiles repo (`nvim/` → `~/.config/nvim`): language extras are
+  declared in `lazyvim.json`, plugins pinned in `lazy-lock.json`, LSP
+  servers/formatters in `lua/plugins/tools.lua` (`ensure_installed`).
+  Dotfiles `install.sh` runs the headless plugin + Mason sync; without it,
+  first `nvim` launch self-heals. Extras in use: python, go, typescript,
+  yaml, docker, terraform, helm, json, markdown + `dap.core` (debugging),
+  `test.core`, `editor.aerial`. VS Code's extension list in
+  `devcontainer.json` is only consumed on `--ide vscode` attach — keep it
+  for the Jupyter/debugging fallback path.
+- **Nerd Font icons** come from a symbols-only tarball (pinned, SHA-256
+  hardcoded in `vm-bootstrap.sh`) installed user-local with a fontconfig
+  fallback rule — the terminal's font setting does not change. If icons look
+  wrong, verify `fc-list | grep "Symbols Nerd Font"` shows two families.
+- **tmux**: `.tmux.conf` (dotfiles) sets `tmux-256color` + truecolor and
+  undercurl passthrough, which LazyVim needs. Fedora's native terminal
+  (Ptyxis/GNOME Terminal) supports both; no alternative terminal required.
 - **mise is the only tool manager.** Global tools: `mise use -g <tool>`.
   Project overrides: `mise.toml` in the project root. Refresh: `mise upgrade`.
   Global installs are isolated from project config (`setup-mise.sh` runs from
