@@ -8,7 +8,8 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # ---------- system packages ----------
-sudo dnf install -y git curl gh vim-enhanced
+# Containers get build-essential from the devcontainers base image.
+sudo dnf install -y git curl gh vim-enhanced gcc make
 
 # ---------- system libs for native Node.js / pnpm binaries ----------
 # Some ARM Fedora images (especially aarch64 on cloud/edge devices) strip
@@ -64,6 +65,30 @@ sudo dnf install -y code
 
 # ---------- VS Code: Dev Containers extension (required for DevPod) ----------
 code --install-extension ms-vscode-remote.remote-containers
+
+# ---------- Nerd Font symbols (icon glyphs for LazyVim/Neovim) ----------
+# Symbols-only tarball from the official ryanoasis/nerd-fonts release, pinned
+# and hash-verified: the expected SHA-256 is hardcoded here (NOT fetched from
+# the release) so the trust root is this repo, not the network — a tampered or
+# replaced release asset fails the check and aborts the bootstrap.
+# User-local install (~/.local/share/fonts): no root, no repo attached, no
+# update channel. The included fontconfig rule makes icons a *fallback*, so
+# the terminal keeps the stock Fedora font and needs no profile change.
+NF_VERSION="v3.5.1"
+NF_SHA256="01172f37db8543edb102e5cb5c64101c9f4686630804d49b419aa07b23a69996"
+NF_DIR="$HOME/.local/share/fonts/nerd-fonts-symbols"
+if [ ! -f "$NF_DIR/SymbolsNerdFontMono-Regular.ttf" ]; then
+  echo "==> Installing Nerd Font symbols $NF_VERSION (pinned, hash-verified)..."
+  NF_TMP="$(mktemp -d)"
+  curl -fsSL -o "$NF_TMP/nf-symbols.tar.xz" \
+    "https://github.com/ryanoasis/nerd-fonts/releases/download/${NF_VERSION}/NerdFontsSymbolsOnly.tar.xz"
+  echo "${NF_SHA256}  $NF_TMP/nf-symbols.tar.xz" | sha256sum -c -
+  mkdir -p "$NF_DIR" "$HOME/.config/fontconfig/conf.d"
+  tar -xJf "$NF_TMP/nf-symbols.tar.xz" -C "$NF_DIR"
+  ln -sf "$NF_DIR/10-nerd-font-symbols.conf" "$HOME/.config/fontconfig/conf.d/"
+  fc-cache -f "$NF_DIR"
+  rm -rf "$NF_TMP"
+fi
 
 # ---------- mise + shared toolset ----------
 bash "$REPO_ROOT/template/setup-mise.sh"

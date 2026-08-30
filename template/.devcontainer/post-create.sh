@@ -38,4 +38,12 @@ if [[ -f "./mise.toml" || -f "../mise.toml" || -f "../../mise.toml" ]]; then
   mise install || true
 fi
 
+# ---------- Neovim (LazyVim) plugin pre-warm ----------
+if [[ -f "$HOME/.config/nvim/init.lua" ]] && command -v nvim &>/dev/null; then
+  echo "==> Neovim config found; pre-warming LazyVim plugins + LSP tools..."
+  nvim --headless "+Lazy! sync" +qa || echo "    [warn] Lazy sync failed; first nvim launch will retry"
+  nvim --headless "+MasonToolsInstallSync" +qa 2>/dev/null \
+    || nvim --headless "+MasonUpdate" +qa || true
+fi
+
 echo "==> Dev environment ready."

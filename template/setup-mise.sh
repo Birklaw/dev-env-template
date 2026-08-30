@@ -50,6 +50,22 @@ mise use -g \
   k9s@latest \
   terraform@latest
 
+# ---------- terminal IDE toolset (LazyVim) ----------
+# Neovim is the primary editor (LazyVim); runs on the VM and in every
+# container via `devpod ssh`. mise's aqua backend ships the official
+# precompiled Neovim release (>= 0.11.2, LuaJIT) — the Ubuntu 24.04 apt build
+# (0.9.x) is too old for current LazyVim, and Fedora's lags too.
+# lazygit/ripgrep/fd/fzf: LazyVim's picker + git integration. tree-sitter:
+# CLI for nvim-treesitter parser compilation (also needs a C compiler —
+# gcc via dnf on the VM, build-essential from the base image in containers).
+mise use -g \
+  neovim@latest \
+  lazygit@latest \
+  ripgrep@latest \
+  fd@latest \
+  fzf@latest \
+  tree-sitter@latest
+
 # Keep mise's npm backend on npm (the default). It ships with the node mise
 # installs, so it's always version-matched. Overriding it (e.g. pnpm) couples
 # every npm:* tool install to that package manager's CLI surface — pnpm 12
