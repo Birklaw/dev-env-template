@@ -59,7 +59,7 @@ matching. An unknown OS stops with an error printing the detected facts. To
 add a new distro: run the matching target directly, verify, then add the
 detected `$ID` to the case. Router dry run: `./bootstrap.sh --print-family`.
 
-Installs: git/curl/gh (GitHub's upstream apt repo on Debian-family),
+Installs: git/curl/gh (GitHub's upstream apt repo on Debian-family), tmux,
 libatomic (if missing), Docker (docker-ce on Debian-family), DevPod CLI,
 VS Code + Dev Containers extension, Nerd Font symbols (pinned +
 hash-verified, fontconfig fallback so the terminal font itself doesn't

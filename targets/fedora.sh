@@ -12,7 +12,9 @@ command -v dnf &>/dev/null || { echo "ERROR: not a dnf-based host" >&2; exit 1; 
 
 # ---------- system packages ----------
 # Containers get build-essential from the devcontainers base image.
-sudo dnf install -y git curl gh vim-enhanced gcc make
+# tmux: the dotfiles .tmux.conf assumes it (truecolor/undercurl passthrough
+# for LazyVim) — not mise-managed, so it comes from the system package manager.
+sudo dnf install -y git curl gh vim-enhanced gcc make tmux
 
 # ---------- system libs for native Node.js / pnpm binaries ----------
 # Some ARM Fedora images (especially aarch64 on cloud/edge devices) strip

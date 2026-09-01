@@ -48,7 +48,7 @@ esac
 # and xz-utils the tar -xJf in the nerd-font step, both absent on minimal
 # Armbian/Debian images.
 sudo apt-get update
-$APT install -y ca-certificates curl fontconfig xz-utils git vim build-essential
+$APT install -y ca-certificates curl fontconfig xz-utils git vim build-essential tmux
 
 # ---------- system libs for native Node.js / pnpm binaries ----------
 # Minimal ARM images can lack libatomic, causing "libatomic.so.1: cannot
