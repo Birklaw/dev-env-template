@@ -49,10 +49,10 @@ cd dev-env-template
 ./bootstrap.sh
 ```
 
-On a headless host over SSH, run the first bootstrap inside tmux (`tmux`, then
-the command above): a foreground bootstrap dies with the SSH session, while
-a dropped tmux session is reattached later. The script is fail-closed and
-idempotent, so an interrupted run is always safe to rerun either way.
+Wrapping the run in tmux is optional insurance: over SSH, a foreground
+bootstrap dies with the connection, while a tmux session can be reattached.
+The script is fail-closed and idempotent, so an interrupted run is always
+safe to rerun — on a stable link, just run it directly.
 
 `bootstrap.sh` detects the host (reads `/etc/os-release`; recognizes Armbian
 via the `/etc/armbian-release` marker) and dispatches to `targets/fedora.sh`
