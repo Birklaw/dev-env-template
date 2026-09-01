@@ -17,22 +17,29 @@ debugging) — attach it per-project with `devpod up --ide vscode`.
 
 - Fedora VM (x86_64/aarch64), or an Armbian/Debian-family host (tested:
   Orange Pi 5B, aarch64, Armbian Debian trixie), with a non-root sudo user
-- GitHub access to this repo (it is private — see below)
+- GitHub access: the repo is public, so a plain clone works on any fresh
+  host; pushing from it needs `gh auth login` + `gh auth setup-git`, or an
+  SSH key (see below)
 
 ## 1. Get this repo onto the host
 
-The repo is private, so GitHub auth must exist *before* cloning. Pick one:
+```bash
+git clone https://github.com/Birklaw/dev-env-template.git
+cd dev-env-template
+```
+
+Cloning is unauthenticated (public repo, HTTPS). To **push** from a fresh
+host, pick one after cloning:
 
 ```bash
-# Option A: SSH key (add the pubkey to GitHub first)
+# Option A: GitHub CLI (installed by bootstrap.sh in any case)
+gh auth login
+gh auth setup-git
+
+# Option B: SSH key
 ssh-keygen -t ed25519
 cat ~/.ssh/id_ed25519.pub   # add at github.com/settings/keys
-git clone git@github.com:Birklaw/dev-env-template.git
-
-# Option B: GitHub CLI
-sudo dnf install -y gh        # Debian-family/Armbian: sudo apt install -y gh
-gh auth login
-gh repo clone Birklaw/dev-env-template
+git remote set-url origin git@github.com:Birklaw/dev-env-template.git
 ```
 
 ## 2. Bootstrap the host (once per machine)
