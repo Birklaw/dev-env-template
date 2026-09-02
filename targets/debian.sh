@@ -17,20 +17,32 @@ APT="sudo DEBIAN_FRONTEND=noninteractive apt-get"
 # The third-party apt repos below (docker, microsoft, github) publish
 # suites for a fixed set of releases; anything else fails with cryptic 404s
 # mid-install, so unknown $DISTRO/$CODENAME pairs stop here instead.
-# /etc/armbian-release wins over /etc/os-release: Armbian varies in what
-# it leaves in the latter, while the marker file always carries
-# DISTRIBUTION / DISTRIBUTION_CODENAME.
-DISTRO="" CODENAME=""
+# The allowlist left-hand side is load-bearing: $DISTRO feeds
+# download.docker.com/linux/$DISTRO, so it must be the BASE distro
+# (debian|ubuntu), not the vendor.
+#
+# /etc/armbian-release is the Armbian marker, but its distro fields vary
+# by image generation — observed on Armbian trixie:
+# DISTRIBUTION / DISTRIBUTION_CODENAME are NOT defined there. Armbian
+# fields win when present, else /etc/os-release ID/VERSION_CODENAME, then
+# the allowlist validates whatever comes out.
 if [ -f /etc/armbian-release ]; then
   # shellcheck disable=SC1091
-  . /etc/armbian-release
-  DISTRO="$DISTRIBUTION"
-  CODENAME="$DISTRIBUTION_CODENAME"
-else
-  # shellcheck disable=SC1091
-  . /etc/os-release
-  DISTRO="$ID"
-  CODENAME="$VERSION_CODENAME"
+  . /etc/armbian-release          # marker present; distro fields optional
+fi
+# shellcheck disable=SC1091
+. /etc/os-release                 # ID, VERSION_CODENAME
+DISTRO="${DISTRIBUTION:-${ID:-}}"
+CODENAME="${DISTRIBUTION_CODENAME:-${VERSION_CODENAME:-}}"
+DISTRO="${DISTRO,,}"
+CODENAME="${CODENAME,,}"
+if [ -z "$DISTRO" ] || [ -z "$CODENAME" ]; then
+  echo "ERROR: could not resolve distro/codename" >&2
+  echo "  armbian-release: DISTRIBUTION='${DISTRIBUTION:-}' DISTRIBUTION_CODENAME='${DISTRIBUTION_CODENAME:-}'" >&2
+  echo "  os-release: ID='${ID:-}' VERSION_CODENAME='${VERSION_CODENAME:-}'" >&2
+  echo "  cat /etc/os-release /etc/armbian-release, pin the observed fields" >&2
+  echo "  into the resolution above and the allowlist below." >&2
+  exit 1
 fi
 case "$DISTRO/$CODENAME" in
   debian/trixie) ;; # tested: Armbian trixie on Orange Pi 5B
@@ -38,6 +50,7 @@ case "$DISTRO/$CODENAME" in
     echo "ERROR: unsupported release: $DISTRO/$CODENAME" >&2
     echo "  If the docker/microsoft/github apt repos publish a suite for it," >&2
     echo "  add it to the allowlist above and retest; otherwise stop here." >&2
+    echo "  (Cat of /etc/os-release /etc/armbian-release needed to proceed.)" >&2
     exit 1
     ;;
 esac
