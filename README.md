@@ -136,7 +136,11 @@ Understanding the sequence makes the moving parts easy to debug:
    creation (~1–2 min); it does not re-run on subsequent starts.
 4. **Dotfiles** — DevPod clones your dotfiles repo *inside the container* and
    runs the configured install script. The repo must be cloneable without
-   host credentials (public HTTPS, or SSH with agent forwarding).
+   host credentials (public HTTPS, or SSH with agent forwarding). The script
+   re-runs on every subsequent `devpod up` (clone skipped, install repeated),
+   and its Neovim pre-warm is timeout-bounded (`NVIM_BOOTSTRAP_TIMEOUT`,
+   default 30 min): a wedged headless bootstrap degrades to a warning + retry
+   instead of hanging `devpod up`.
 5. **IDE attach** (`--ide vscode` only) — DevPod launches the host's VS Code,
    the Dev Containers extension connects to the container, and the extension
    list from `devcontainer.json` is installed into the container's VS Code
@@ -175,7 +179,9 @@ the project dir) is rebuilt by `post-create.sh` + dotfiles on recreation, so
   the dotfiles repo (`nvim/` → `~/.config/nvim`): language extras are
   declared in `lazyvim.json`, plugins pinned in `lazy-lock.json`, LSP
   servers/formatters in `lua/plugins/tools.lua` (`ensure_installed`).
-  Dotfiles `install.sh` runs the headless plugin + Mason sync; without it,
+  Dotfiles `install.sh` runs the headless plugin + Mason sync — the pre-warm
+  lives only there (NOT in `post-create.sh`, which runs before dotfiles are
+  applied), timeout-bounded and re-applied on every `devpod up`; without it,
   first `nvim` launch self-heals. Extras in use: python, go, typescript,
   yaml, docker, terraform, helm, json, markdown + `dap.core` (debugging),
   `test.core`, `editor.aerial`. VS Code's extension list in
