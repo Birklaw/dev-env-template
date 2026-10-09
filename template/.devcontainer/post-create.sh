@@ -21,15 +21,16 @@ APT_OPTS=(-y -q
   -o Acquire::Retries=2)
 
 # ---------- DNS preflight ----------
-# The host resolver can be a stub (e.g. systemd-resolved at 127.0.0.53) that
+# The host resolver can be a stub that
 # exists only in the host netns, and a VPN/tailnet can hijack DNS so the
 # container gets "Temporary failure resolving" from apt/pnpm. devcontainer.json
 # pins public resolvers via runArgs --dns; check resolution before the first
 # apt call so the failure is actionable instead of a wall of apt noise.
 case "$(dpkg --print-architecture)" in
-  arm64|armhf) APT_HOST=ports.ubuntu.com ;;
-  *)           APT_HOST=archive.ubuntu.com ;;
+arm64 | armhf) APT_HOST=ports.ubuntu.com ;;
+*) APT_HOST=archive.ubuntu.com ;;
 esac
+
 if ! getent hosts "$APT_HOST" >/dev/null 2>&1; then
   echo "ERROR: DNS resolution failed inside the container ($APT_HOST)." >&2
   echo "If the host uses a systemd-resolved stub or a VPN/tailnet resolver," >&2
