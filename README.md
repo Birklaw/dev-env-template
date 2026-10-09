@@ -202,6 +202,15 @@ the project dir) is rebuilt by `post-create.sh` + dotfiles on recreation, so
   feature mounts the host socket to `/var/run/docker-host.sock` and proxies a
   permission-fixed `/var/run/docker.sock` (sibling containers, shared build
   cache, no privileged mode). Don't add your own socket mount.
+- **Container DNS.** The template pins public resolvers (`--dns 1.1.1.1`,
+  `--dns 8.8.8.8`) in `devcontainer.json` and `post-create.sh` preflights
+  resolution before the first `apt` call. This is deliberate: on a host whose
+  resolver is the systemd-resolved stub `127.0.0.53` (host netns only) or
+  behind a VPN/tailnet exit, containers otherwise fail to resolve the Ubuntu
+  archive and can't pull images. If the container must resolve tailnet
+  MagicDNS names, add the tailnet resolver to `runArgs` too; if the host's
+  own resolver is already reachable from containers, the entries can be
+  dropped.
 - **Dotfiles** are applied by DevPod to every workspace. Change with:
   `devpod context set-options -o DOTFILES_URL=... -o DOTFILES_SCRIPT=...`
 - **GitHub auth inside containers:** `gh auth login` on the host does **not**
