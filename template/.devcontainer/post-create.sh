@@ -59,6 +59,23 @@ else
   echo "==> vim install step not required."
 fi
 
+# ---------- host locale ----------
+# devpod's ssh transport forwards the client's LANG/LC_* (ssh_config
+# SendEnv) into every container shell. The base image ships only C.UTF-8,
+# so each one prints "setlocale: LC_ALL: cannot change locale
+# (en_IE.UTF-8)" on every ssh command and herdr machine hop. Generate the
+# host's locale once; locale-gen lives in the locales package, which
+# minimal base images strip. Revisit the pinned locale if the host's
+# locale ever changes.
+if ! locale -a 2>/dev/null | grep -qi 'en_IE.utf8'; then
+  echo "==> Generating en_IE.UTF-8 locale..."
+  command -v locale-gen &>/dev/null || $APT install "${APT_OPTS[@]}" locales </dev/null
+  sudo locale-gen en_IE.UTF-8 >/dev/null
+  echo "==> en_IE.UTF-8 generated."
+else
+  echo "==> en_IE.UTF-8 already present."
+fi
+
 # ---------- base toolchain (mise + global tools) ----------
 bash "$REPO_ROOT/setup-mise.sh"
 
