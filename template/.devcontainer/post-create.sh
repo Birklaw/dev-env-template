@@ -83,8 +83,9 @@ bash "$REPO_ROOT/setup-mise.sh"
 export PATH="$HOME/.local/bin:$PATH"
 
 # ---------- project-level mise.toml (if present) ----------
-# Fail closed: a broken project pin should surface here, not silently leave the
-# container on the global toolchain.
+# Resilience over fail-closed here: a bad project pin or a transient network
+# failure must not wedge `devpod up`. Warn loudly and let the container come up
+# on the global toolchain; the user can rerun `mise install` once fixed.
 MISE_TOML=""
 for candidate in ./mise.toml ../mise.toml ../../mise.toml; do
   if [[ -f "$candidate" ]]; then
@@ -94,8 +95,13 @@ for candidate in ./mise.toml ../mise.toml ../../mise.toml; do
 done
 if [[ -n "$MISE_TOML" ]]; then
   echo "==> Found $MISE_TOML, installing project-specific tools..."
-  mise trust "$MISE_TOML"
-  mise install
+  if ! mise trust "$MISE_TOML" || ! mise install; then
+    echo "WARNING: project tool install failed for $MISE_TOML." >&2
+    echo "         The container is up on the global toolchain; any project" >&2
+    echo "         pin that did not install is missing. Once the cause is" >&2
+    echo "         fixed (network, bad version), rerun:" >&2
+    echo "           mise trust $MISE_TOML && mise install" >&2
+  fi
 fi
 
 echo "==> Dev environment ready."

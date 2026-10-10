@@ -196,8 +196,12 @@ the project dir) is rebuilt by `post-create.sh` + dotfiles on recreation, so
   (Ptyxis/GNOME Terminal) supports both; no alternative terminal required.
 - **mise is the only tool manager.** Global tools: `mise use -g <tool>`.
   Project overrides: `mise.toml` in the project root. Refresh: `mise upgrade`.
-  Global installs are isolated from project config (`setup-mise.sh` runs from
-  `$HOME`), so a project's pins can never break the base toolchain.
+  The base toolset in `setup-mise.sh` is pinned to compatibility boundaries
+  (language major.minor, tool majors, 0.x minors, agent CLIs exact), so
+  bootstrap is reproducible and `mise upgrade` moves within each pin rather
+  than across it — bump a pin deliberately to move on. Global installs are
+  isolated from project config (`setup-mise.sh` runs from `$HOME`), so a
+  project's pins can never break the base toolchain.
 - **Docker runs on the host.** Containers use docker-outside-of-docker: the
   feature mounts the host socket to `/var/run/docker-host.sock` and proxies a
   permission-fixed `/var/run/docker.sock` (sibling containers, shared build

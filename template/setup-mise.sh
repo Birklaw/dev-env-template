@@ -29,8 +29,10 @@ eval "$("$MISE_BIN" activate bash)"
 
 # ---------- global toolset ----------
 # Shorthands resolve via the mise registry (core/aqua backends: precompiled,
-# checksum-verified). Bump these intentionally; 'mise upgrade' refreshes the
-# ones pinned to latest.
+# checksum-verified). Pinned to the compatibility boundary rather than exact
+# patches: language major.minor, semver tools' major, 0.x tools' minor, agent
+# CLIs exact. Reproducible on bootstrap, while `mise upgrade` still moves within
+# each pin (e.g. 0.12.x). Bump deliberately.
 #
 # Run from $HOME, not the caller's cwd: when invoked from a project directory
 # (e.g. .devcontainer/post-create.sh), mise would otherwise resolve the
@@ -40,31 +42,35 @@ eval "$("$MISE_BIN" activate bash)"
 cd "$HOME"
 
 mise use -g \
-  node@lts \
+  node@24 \
   python@3.14 \
-  go@latest \
-  uv@latest \
-  pnpm@latest \
-  kubectl@latest \
-  helm@latest \
-  k9s@latest \
-  terraform@latest
+  go@1.27 \
+  uv@0.12 \
+  pnpm@12 \
+  kubectl@1.37 \
+  helm@4 \
+  k9s@0.51 \
+  terraform@1.16
 
 # ---------- terminal IDE toolset (LazyVim) ----------
 # Neovim is the primary editor (LazyVim); runs on the VM and in every
 # container via `devpod ssh`. mise's aqua backend ships the official
-# precompiled Neovim release (>= 0.11.2, LuaJIT) — the Ubuntu 24.04 apt build
-# (0.9.x) is too old for current LazyVim, and Fedora's lags too.
-# lazygit/ripgrep/fd/fzf: LazyVim's picker + git integration. tree-sitter:
-# CLI for nvim-treesitter parser compilation (also needs a C compiler —
-# gcc via dnf on the VM, build-essential from the base image in containers).
+# precompiled Neovim release (LuaJIT). Version floor is set by the dotfiles
+# lazy-lock.json, not by LazyVim alone: LazyVim needs >= 0.11.2, but its pinned
+# nvim-treesitter commit needs >= 0.12.0 — so 0.12 is the effective minimum.
+# Don't lower this without re-checking both. The Ubuntu 24.04 apt build
+# (0.9.x) is far too old.
+# lazygit/ripgrep/fd/fzf: LazyVim's picker + git integration (no version
+# floor). tree-sitter: nvim-treesitter parser compilation needs >= 0.26.1 and
+# the official binary (not npm), plus a C compiler — gcc via dnf on the VM,
+# gcc/make already in the devcontainers base image.
 mise use -g \
-  neovim@latest \
-  lazygit@latest \
-  ripgrep@latest \
-  fd@latest \
-  fzf@latest \
-  tree-sitter@latest
+  neovim@0.12 \
+  lazygit@0.66 \
+  ripgrep@15 \
+  fd@10 \
+  fzf@0.74 \
+  tree-sitter@0.27
 
 # Keep mise's npm backend on npm (the default). It ships with the node mise
 # installs, so it's always version-matched. Overriding it (e.g. pnpm) couples
@@ -89,8 +95,8 @@ export PATH="$PNPM_HOME:$PATH"
 # backend needs node, which the toolset above provides. Pi's docs state
 # install scripts aren't required, so mise's --ignore-scripts default is fine.
 mise use -g \
-  herdr@latest \
-  "npm:@earendil-works/pi-coding-agent"
+  herdr@0.9 \
+  "npm:@earendil-works/pi-coding-agent@1.1.0"
 
 echo "==> mise toolset installed:"
 mise ls
