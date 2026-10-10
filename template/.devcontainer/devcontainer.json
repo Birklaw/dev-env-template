@@ -34,7 +34,7 @@
   },
   "postCreateCommand": "bash .devcontainer/post-create.sh",
   // Make mise shims and pnpm global bins visible to non-interactive shells
-  // (VS Code tasks, debuggers, extension language servers); interactive bash
+  // (e.g. `devpod ssh <ws> -- <cmd>`, task runners); interactive bash
   // additionally gets `mise activate` + PNPM_HOME via .bashrc from setup-mise.sh.
   "remoteEnv": {
     "PNPM_HOME": "/home/vscode/.local/share/pnpm",
@@ -45,9 +45,9 @@
   //   devpod context set-options \
   //     -o DOTFILES_URL=https://github.com/<you>/dotfiles \
   //     -o DOTFILES_SCRIPT=install.sh
-  // No static forwardPorts: VS Code auto-forwards ports when a service starts
-  // listening in the container (see the PORTS panel). Static entries only add
-  // collision risk between multiple workspaces. If an external tool ever needs
-  // a port before anything listens, add it per-project, not in the template.
+  // No static forwardPorts: port forwarding is on demand (DevPod, or an
+  // attached editor), so static entries only add collision risk between
+  // workspaces. If an external tool ever needs a port before anything
+  // listens, add it per-project, not in the template.
   "remoteUser": "vscode"
 }

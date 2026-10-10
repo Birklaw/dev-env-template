@@ -2,7 +2,7 @@
 
 Bootstrap a fresh Fedora VM or an Armbian/Debian-family host (tested:
 Orange Pi 5B, aarch64, Armbian Debian trixie) into a dev environment:
-Docker + DevPod + VS Code on the host, per-project devcontainers built from
+Docker + DevPod on the host, per-project devcontainers built from
 `template/`, and a shared mise-managed toolchain (node, python, go, uv, pnpm,
 kubectl, helm, k9s, terraform) plus agent CLIs (herdr, pi) installed
 identically on the host and inside every container.
@@ -10,8 +10,8 @@ identically on the host and inside every container.
 Editing is **terminal-first with LazyVim (Neovim)**: `neovim`, `lazygit`,
 `ripgrep`, `fd`, `fzf` and `tree-sitter` are mise-managed like everything
 else, and the LazyVim config ships via the dotfiles repo into every
-container. VS Code remains installed on the host as a fallback (Jupyter, GUI
-debugging) — attach it per-project with `devpod up --ide vscode`.
+container. There is **no VS Code**: containers are started with
+`devpod up --ide none` and entered over `devpod ssh`.
 
 ## Prerequisites
 
@@ -66,10 +66,9 @@ detected `$ID` to the case. Router dry run: `./bootstrap.sh --print-family`.
 
 Installs: git/curl/gh (GitHub's upstream apt repo on Debian-family), tmux,
 libatomic (if missing), Docker (docker-ce on Debian-family), DevPod CLI,
-VS Code + Dev Containers extension, Nerd Font symbols (pinned +
-hash-verified, fontconfig fallback so the terminal font itself doesn't
-change), dotfiles defaults for DevPod, and the mise toolchain + agent CLIs
-(via `template/setup-mise.sh`).
+Nerd Font symbols (pinned + hash-verified, fontconfig fallback so the
+terminal font itself doesn't change), dotfiles defaults for DevPod, and the
+mise toolchain + agent CLIs (via `template/setup-mise.sh`).
 
 **Then reboot** (a fresh login is often enough, but a reboot is the reliable
 way to get docker group membership picked up everywhere).
@@ -93,30 +92,26 @@ python = "3.12"
 ## 4. Spin up the devcontainer
 
 ```bash
-devpod up ~/my-project               # terminal-first: no IDE flag needed
+devpod up ~/my-project --ide none    # start container, don't launch an editor
 ```
+
+**Always pass `--ide none`.** DevPod's default IDE is VS Code, which is no
+longer installed; without the flag `devpod up` tries to launch it. `--ide
+none` starts the container only, and you enter it over SSH.
 
 First run takes a few minutes (pulls the base image, installs the toolchain).
 
 Terminal-first daily flow (LazyVim):
 
 ```bash
-devpod up ~/my-project               # start container (idempotent)
+devpod up ~/my-project --ide none    # start container (idempotent)
 devpod ssh my-project                # shell into the container
 nvim .                               # LazyVim: LSP, fuzzy-find, git, debug
 ```
 
-VS Code remains available as a fallback (Jupyter notebooks, GUI debugging):
-
-```bash
-devpod up ~/my-project --ide vscode  # attach VS Code to the container
-```
-
-Note: plain `code ~/my-project` opens the folder *locally* — you'd get the
-host's toolchain, not the container's. Always attach via `--ide vscode` (or
-"Dev Containers: Attach" from VS Code). Once attached, VS Code's integrated
-terminal runs inside the container, and `devpod ssh` sessions share the same
-container, dotfiles, mise toolchain, and LazyVim config.
+If you ever do want a GUI editor, any DevPod-supported IDE can be attached
+per-project with `--ide <name>` (`devpod ide list`); the template itself stays
+editor-agnostic and ships no extension list.
 
 ## What happens on `devpod up`
 
@@ -127,8 +122,8 @@ Understanding the sequence makes the moving parts easy to debug:
    after the first run; rebuilt only when the config changes or you pass
    `--recreate`.
 2. **Container start** — the project directory is bind-mounted in, so your
-   files live on the host and are shared by every session (VS Code, `devpod
-   ssh`) that touches this workspace.
+   files live on the host and are shared by every `devpod ssh` session that
+   touches this workspace.
 3. **`postCreateCommand`** — runs `.devcontainer/post-create.sh` inside the
    container: installs `libatomic1` if needed, runs `setup-mise.sh` (mise +
    global toolchain, isolated from project config), then applies your
@@ -141,19 +136,18 @@ Understanding the sequence makes the moving parts easy to debug:
    and its Neovim pre-warm is timeout-bounded (`NVIM_BOOTSTRAP_TIMEOUT`,
    default 30 min): a wedged headless bootstrap degrades to a warning + retry
    instead of hanging `devpod up`.
-5. **IDE attach** (`--ide vscode` only) — DevPod launches the host's VS Code,
-   the Dev Containers extension connects to the container, and the extension
-   list from `devcontainer.json` is installed into the container's VS Code
-   server in the background.
+5. **No IDE attach** — with `--ide none`, DevPod stops after starting the
+   container; connect with `devpod ssh`. (Any DevPod IDE can still be attached
+   per-project with `--ide <name>`.)
 
 ### Lifecycle
 
 ```bash
-devpod up my-project            # start (idempotent; reuses existing container)
-devpod stop my-project          # stop, keep container + its state
-devpod up ... --recreate        # rebuild after changing .devcontainer/
-devpod delete my-project        # remove container entirely (project files
-                                 # survive — they're the mounted host directory)
+devpod up my-project --ide none        # start (idempotent; reuses existing container)
+devpod stop my-project                 # stop, keep container + its state
+devpod up ... --ide none --recreate    # rebuild after changing .devcontainer/
+devpod delete my-project               # remove container entirely (project files
+                                       # survive — they're the mounted host directory)
 ```
 
 Container-local state (installed tools, dotfiles symlinks, anything outside
@@ -165,15 +159,15 @@ the project dir) is rebuilt by `post-create.sh` + dotfiles on recreation, so
 | Path | Purpose |
 |---|---|
 | `bootstrap.sh` | Router: detect OS family (fail-closed) → dispatch to a target |
-| `targets/fedora.sh` | Fedora host base layer: dnf packages, docker, VS Code repo |
-| `targets/debian.sh` | Debian-family/Armbian host base layer: apt, docker-ce, gh + VS Code repos |
+| `targets/fedora.sh` | Fedora host base layer: dnf packages + docker |
+| `targets/debian.sh` | Debian-family/Armbian host base layer: apt, docker-ce, gh apt repo |
 | `lib/common.sh` | Distro-agnostic host steps (devpod, docker group, nerd font, mise) |
 | `template/setup-mise.sh` | Shared toolchain installer — runs on the host and in every devcontainer |
 | `template/.devcontainer/` | Copy into each new project: container definition + post-create hook |
 
 ## Notes
 
-- **LazyVim is the primary editor; VS Code is the fallback.** Neovim +
+- **LazyVim is the editor.** Neovim +
   `lazygit`/`ripgrep`/`fd`/`fzf`/`tree-sitter` come from the shared mise
   toolchain (identical on host and in containers). The LazyVim config lives in
   the dotfiles repo (`nvim/` → `~/.config/nvim`): language extras are
@@ -184,9 +178,8 @@ the project dir) is rebuilt by `post-create.sh` + dotfiles on recreation, so
   applied), timeout-bounded and re-applied on every `devpod up`; without it,
   first `nvim` launch self-heals. Extras in use: python, go, typescript,
   yaml, docker, terraform, helm, json, markdown + `dap.core` (debugging),
-  `test.core`, `editor.aerial`. VS Code's extension list in
-  `devcontainer.json` is only consumed on `--ide vscode` attach — keep it
-  for the Jupyter/debugging fallback path.
+  `test.core`, `editor.aerial`. `devcontainer.json` ships no extension list —
+  the container is editor-agnostic.
 - **Nerd Font icons** come from a symbols-only tarball (pinned, SHA-256
   hardcoded in `lib/common.sh`) installed user-local with a fontconfig
   fallback rule — the terminal's font setting does not change. If icons look
@@ -194,6 +187,12 @@ the project dir) is rebuilt by `post-create.sh` + dotfiles on recreation, so
 - **tmux**: `.tmux.conf` (dotfiles) sets `tmux-256color` + truecolor and
   undercurl passthrough, which LazyVim needs. Fedora's native terminal
   (Ptyxis/GNOME Terminal) supports both; no alternative terminal required.
+- **Container locale.** `post-create.sh` generates the host's locale
+  (`en_IE.UTF-8`) once: DevPod's ssh transport forwards the client's
+  `LANG`/`LC_*`, and the base image only ships `C.UTF-8`/`en_US.UTF-8`, so
+  without it every `devpod ssh` prints `setlocale: LC_ALL: cannot change
+  locale`. It's pinned to `en_IE` — change it in `post-create.sh` if the
+  host's locale changes.
 - **mise is the only tool manager.** Global tools: `mise use -g <tool>`.
   Project overrides: `mise.toml` in the project root. Refresh: `mise upgrade`.
   The base toolset in `setup-mise.sh` is pinned to compatibility boundaries
@@ -223,8 +222,8 @@ the project dir) is rebuilt by `post-create.sh` + dotfiles on recreation, so
   `gh auth login` there once (auth persists in the container's home until
   recreation).
 - **ARM64 hosts** (e.g. Orange Pi 5B under Armbian): every component ships
-  native aarch64 Linux builds — docker-ce, VS Code and gh via their
-  arm64-publishing apt repos, DevPod's `linux-arm64` binary, and the whole
+  native aarch64 Linux builds — docker-ce and gh via their arm64-publishing
+  apt repos, DevPod's `linux-arm64` binary, and the whole
   mise toolchain including the agent CLIs (herdr's official
   `herdr-linux-aarch64` assets, pi's `pi-linux-arm64` builds). Devcontainers
   built on an ARM host are arm64 images too — host arch = container arch,

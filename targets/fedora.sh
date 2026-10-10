@@ -1,5 +1,5 @@
 #!/bin/bash
-# Fedora host bootstrap: system packages + docker + devpod + VS Code, then
+# Fedora host bootstrap: system packages + docker + devpod, then
 # the shared mise toolchain. Run via ../bootstrap.sh (or directly on a host
 # being validated for the router allowlist). Distro-agnostic steps live in
 # ../lib/common.sh.
@@ -36,12 +36,6 @@ enable_docker
 install_devpod
 configure_devpod
 
-# ---------- VS Code (one global install on the host; NOT per container) --
-sudo rpm --import https://packages.microsoft.com/keys/microsoft.asc
-sudo sh -c 'echo -e "[code]\nname=Visual Studio Code\nbaseurl=https://packages.microsoft.com/yumrepos/vscode\nenabled=1\ngpgcheck=1\ngpgkey=https://packages.microsoft.com/keys/microsoft.asc" > /etc/yum.repos.d/vscode.repo'
-sudo dnf install -y code
-install_vscode_extensions
-
 # ---------- Nerd Font symbols ----------
 install_nerd_font
 
@@ -50,4 +44,4 @@ run_toolchain_install
 
 echo "==> Fedora host bootstrap complete."
 echo "    Reboot (or log out/in) so docker group membership applies, then:"
-echo "      devpod up <path-or-git-url> --ide vscode"
+echo "      devpod up <path-or-git-url> --ide none"

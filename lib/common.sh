@@ -72,11 +72,6 @@ configure_devpod() {
     -o DOTFILES_SCRIPT="install.sh"
 }
 
-# ---------- VS Code: Dev Containers extension (required for DevPod) ------
-install_vscode_extensions() {
-  code --install-extension ms-vscode-remote.remote-containers
-}
-
 # ---------- Nerd Font symbols (icon glyphs for LazyVim/Neovim) ----------
 # Symbols-only tarball from the official ryanoasis/nerd-fonts release, pinned
 # and hash-verified: the expected SHA-256 is hardcoded here (NOT fetched from

@@ -1,7 +1,7 @@
 #!/bin/bash
 # Debian-family host bootstrap: Debian proper and Armbian/Debian images
 # (tested: Orange Pi 5B, aarch64, Armbian Debian trixie). System packages +
-# docker-ce + devpod + VS Code, then the shared mise toolchain. Run via
+# docker-ce + devpod, then the shared mise toolchain. Run via
 # ../bootstrap.sh (or directly on a host being validated for the router
 # allowlist). Distro-agnostic steps live in ../lib/common.sh.
 set -euo pipefail
@@ -14,7 +14,7 @@ command -v apt-get &>/dev/null || { echo "ERROR: not an apt-based host" >&2; exi
 APT="sudo DEBIAN_FRONTEND=noninteractive apt-get"
 
 # ---------- host identity: apt-suite resolution (fail-closed) ----------
-# The third-party apt repos below (docker, microsoft, github) publish
+# The third-party apt repos below (docker, github) publish
 # suites for a fixed set of releases; anything else fails with cryptic 404s
 # mid-install, so unknown $DISTRO/$CODENAME pairs stop here instead.
 # The allowlist left-hand side is load-bearing: $DISTRO feeds
@@ -48,7 +48,7 @@ case "$DISTRO/$CODENAME" in
   debian/trixie) ;; # tested: Armbian trixie on Orange Pi 5B
   *)
     echo "ERROR: unsupported release: $DISTRO/$CODENAME" >&2
-    echo "  If the docker/microsoft/github apt repos publish a suite for it," >&2
+    echo "  If the docker/github apt repos publish a suite for it," >&2
     echo "  add it to the allowlist above and retest; otherwise stop here." >&2
     echo "  (Cat of /etc/os-release /etc/armbian-release needed to proceed.)" >&2
     exit 1
@@ -106,27 +106,9 @@ Signed-By: /etc/apt/keyrings/docker.asc
 EOF
 fi
 
-# ---------- VS Code (one global install on the host; NOT per container) --
-# Microsoft's apt repo publishes amd64/arm64/armhf debs, so aarch64 boards
-# install identically to the x86 path. Same armored-key + deb822 pattern.
-if [ ! -f /etc/apt/sources.list.d/vscode.sources ]; then
-  echo "==> Adding VS Code apt repo..."
-  sudo curl -fsSL "https://packages.microsoft.com/keys/microsoft.asc" \
-    -o /etc/apt/keyrings/microsoft.asc
-  sudo chmod a+r /etc/apt/keyrings/microsoft.asc
-  sudo tee /etc/apt/sources.list.d/vscode.sources >/dev/null <<EOF
-Types: deb
-URIs: https://packages.microsoft.com/repos/code
-Suites: stable
-Components: main
-Architectures: $(dpkg --print-architecture)
-Signed-By: /etc/apt/keyrings/microsoft.asc
-EOF
-fi
-
 # ---------- install from first-party + third-party repos ----------
 sudo apt-get update
-$APT install -y gh code
+$APT install -y gh
 if ! command -v docker &>/dev/null; then
   echo "==> Installing docker-ce..."
   $APT install -y docker-ce docker-ce-cli containerd.io \
@@ -137,7 +119,6 @@ enable_docker
 # ---------- devpod CLI + dotfiles defaults ----------
 install_devpod
 configure_devpod
-install_vscode_extensions
 
 # ---------- Nerd Font symbols ----------
 install_nerd_font
@@ -147,4 +128,4 @@ run_toolchain_install
 
 echo "==> Debian-family host bootstrap complete ($DISTRO/$CODENAME)."
 echo "    Reboot (or log out/in) so docker group membership applies, then:"
-echo "      devpod up <path-or-git-url> --ide vscode"
+echo "      devpod up <path-or-git-url> --ide none"
