@@ -82,6 +82,12 @@ bash "$REPO_ROOT/setup-mise.sh"
 # setup-mise.sh ran in a subshell; re-add mise to PATH for what follows.
 export PATH="$HOME/.local/bin:$PATH"
 
+# ---------- skill packs for Pi ----------
+# Pi is installed above; this installs the configured skill packs into
+# ~/.agents/skills so Pi discovers them in every project. Mirrors the host
+# bootstrap step.
+bash "$REPO_ROOT/install-skills.sh"
+
 # ---------- project-level mise.toml (if present) ----------
 # Resilience over fail-closed here: a bad project pin or a transient network
 # failure must not wedge `devpod up`. Warn loudly and let the container come up

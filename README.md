@@ -126,7 +126,8 @@ Understanding the sequence makes the moving parts easy to debug:
    touches this workspace.
 3. **`postCreateCommand`** — runs `.devcontainer/post-create.sh` inside the
    container: installs `libatomic1` if needed, runs `setup-mise.sh` (mise +
-   global toolchain, isolated from project config), then applies your
+   global toolchain, isolated from project config), installs the configured
+   skill packs (`install-skills.sh`), then applies your
    project's `mise.toml` pins if present. This is the slow step on first
    creation (~1–2 min); it does not re-run on subsequent starts.
 4. **Dotfiles** — DevPod clones your dotfiles repo *inside the container* and
@@ -163,10 +164,21 @@ the project dir) is rebuilt by `post-create.sh` + dotfiles on recreation, so
 | `targets/debian.sh` | Debian-family/Armbian host base layer: apt, docker-ce, gh apt repo |
 | `lib/common.sh` | Distro-agnostic host steps (devpod, docker group, nerd font, mise) |
 | `template/setup-mise.sh` | Shared toolchain installer — runs on the host and in every devcontainer |
+| `template/install-skills.sh` | Shared skill-pack installer — installs configured packs into Pi's global skills dir; runs on the host and in every devcontainer |
 | `template/.devcontainer/` | Copy into each new project: container definition + post-create hook |
 
 ## Notes
 
+- **Skill packs.** `install-skills.sh` installs one or more skill packs into
+  `~/.agents/skills/`, Pi's global Agent Skills location, so they are
+  available in every project on the host and in every container with no
+  per-project wiring. The packs are declared in a single list at the top of
+  `template/install-skills.sh`; adding one is a single line (repository, ref,
+  skills subdirectory, skills to omit, shared directories). Each pack is kept
+  as a full checkout under `~/.local/share/agent-skills/`, because its skills
+  may reference files shared across the pack by relative path. Cross-cutting
+  behaviours that no pack carries live in the dotfiles
+  `~/.pi/agent/AGENTS.md`.
 - **LazyVim is the editor.** Neovim +
   `lazygit`/`ripgrep`/`fd`/`fzf`/`tree-sitter` come from the shared mise
   toolchain (identical on host and in containers). The LazyVim config lives in

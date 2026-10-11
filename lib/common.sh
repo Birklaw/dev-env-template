@@ -105,4 +105,7 @@ run_toolchain_install() {
   # Single source of truth for the toolchain (mise-managed tools + agent
   # CLIs), shared by the host and every devcontainer.
   bash "$REPO_ROOT/template/setup-mise.sh"
+  # Skill packs for Pi — also installed in every container by
+  # .devcontainer/post-create.sh. Kept here so host + container use one script.
+  bash "$REPO_ROOT/template/install-skills.sh"
 }
