@@ -67,8 +67,9 @@ detected `$ID` to the case. Router dry run: `./bootstrap.sh --print-family`.
 Installs: git/curl/gh (GitHub's upstream apt repo on Debian-family), tmux,
 libatomic (if missing), Docker (docker-ce on Debian-family), DevPod CLI,
 Nerd Font symbols (pinned + hash-verified, fontconfig fallback so the
-terminal font itself doesn't change), dotfiles defaults for DevPod, and the
-mise toolchain + agent CLIs (via `template/setup-mise.sh`).
+terminal font itself doesn't change), dotfiles defaults for DevPod, the
+mise toolchain + agent CLIs (via `template/setup-mise.sh`), and the skill
+packs (via `template/install-skills.sh`).
 
 **Then reboot** (a fresh login is often enough, but a reboot is the reliable
 way to get docker group membership picked up everywhere).
@@ -80,6 +81,11 @@ mkdir ~/my-project && cd ~/my-project
 cp -r ~/dev-env-template/template/. .
 git init
 ```
+
+The copy places the container definition and its provisioning scripts
+(`.devcontainer/`, `setup-mise.sh`, `install-skills.sh`) in the project.
+These are read by the devcontainer's post-create hook — they are not part
+of your application code.
 
 Optional — pin project-specific tool versions in a `mise.toml`:
 
