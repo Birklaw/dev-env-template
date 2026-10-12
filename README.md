@@ -172,12 +172,12 @@ the project dir) is rebuilt by `post-create.sh` + dotfiles on recreation, so
 - **Skill packs.** `install-skills.sh` installs one or more skill packs into
   `~/.agents/skills/`, Pi's global Agent Skills location, so they are
   available in every project on the host and in every container with no
-  per-project wiring. The packs are declared in a single list at the top of
-  `template/install-skills.sh`; adding one is a single line (repository, ref,
-  skills subdirectory, skills to omit, shared directories). Each pack is kept
-  as a full checkout under `~/.local/share/agent-skills/`, because its skills
-  may reference files shared across the pack by relative path. Cross-cutting
-  behaviours that no pack carries live in the dotfiles
+  per-project wiring. Packs are declared as `install_pack` calls in
+  `template/install-skills.sh` (option reference at the top of that script);
+  a pack's skills are symlinked individually, so a subset can be selected.
+  Each pack is kept as a full checkout under `~/.local/share/agent-skills/`,
+  because its skills may reference files shared across the pack by relative
+  path. Cross-cutting behaviours that no pack carries live in the dotfiles
   `~/.pi/agent/AGENTS.md`.
 - **LazyVim is the editor.** Neovim +
   `lazygit`/`ripgrep`/`fd`/`fzf`/`tree-sitter` come from the shared mise
