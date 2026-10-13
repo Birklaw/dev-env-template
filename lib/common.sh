@@ -108,4 +108,6 @@ run_toolchain_install() {
   # Skill packs for Pi — also installed in every container by
   # .devcontainer/post-create.sh. Kept here so host + container use one script.
   bash "$REPO_ROOT/template/install-skills.sh"
+  # Pi packages (providers) — likewise shared with .devcontainer/post-create.sh.
+  bash "$REPO_ROOT/template/install-pi-packages.sh"
 }

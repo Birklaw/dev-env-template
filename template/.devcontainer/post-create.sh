@@ -88,6 +88,11 @@ export PATH="$HOME/.local/bin:$PATH"
 # bootstrap step.
 bash "$REPO_ROOT/install-skills.sh"
 
+# ---------- Pi packages (providers) ----------
+# Provider extensions declared in install-pi-packages.sh. Mirrors the host
+# bootstrap step.
+bash "$REPO_ROOT/install-pi-packages.sh"
+
 # ---------- project-level mise.toml (if present) ----------
 # Resilience over fail-closed here: a bad project pin or a transient network
 # failure must not wedge `devpod up`. Warn loudly and let the container come up

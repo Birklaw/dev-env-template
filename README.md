@@ -164,13 +164,14 @@ the project dir) is rebuilt by `post-create.sh` + dotfiles on recreation, so
 ## Layout
 
 | Path | Purpose |
-|---|---|
+| --- | --- |
 | `bootstrap.sh` | Router: detect OS family (fail-closed) → dispatch to a target |
 | `targets/fedora.sh` | Fedora host base layer: dnf packages + docker |
 | `targets/debian.sh` | Debian-family/Armbian host base layer: apt, docker-ce, gh apt repo |
 | `lib/common.sh` | Distro-agnostic host steps (devpod, docker group, nerd font, mise) |
 | `template/setup-mise.sh` | Shared toolchain installer — runs on the host and in every devcontainer |
 | `template/install-skills.sh` | Shared skill-pack installer — installs configured packs into Pi's global skills dir; runs on the host and in every devcontainer |
+| `template/install-pi-packages.sh` | Shared Pi package installer (providers/extensions) — runs on the host and in every devcontainer |
 | `template/.devcontainer/` | Copy into each new project: container definition + post-create hook |
 
 ## Notes
