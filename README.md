@@ -186,6 +186,14 @@ the project dir) is rebuilt by `post-create.sh` + dotfiles on recreation, so
   because its skills may reference files shared across the pack by relative
   path. Cross-cutting behaviours that no pack carries live in the dotfiles
   `~/.pi/agent/AGENTS.md`.
+- **Pi packages (providers).** `install-pi-packages.sh` installs the declared
+  Pi packages via `pi install`, pinned to immutable refs. Each package is listed
+  under `~/.pi/agent/` and records the source in `~/.pi/agent/settings.json`;
+  nothing is vendored into this repo. **Credentials are not provisioned:**
+  they live in `~/.pi/agent/auth.json` and are set at runtime.
+  A devcontainer's home is ephemeral, so these will be reset.
+  Add or remove a package with one `install_pi_package` line in
+  `template/install-pi-packages.sh`.
 - **LazyVim is the editor.** Neovim +
   `lazygit`/`ripgrep`/`fd`/`fzf`/`tree-sitter` come from the shared mise
   toolchain (identical on host and in containers). The LazyVim config lives in
