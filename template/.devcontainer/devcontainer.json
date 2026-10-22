@@ -30,6 +30,13 @@
   "features": {
     "ghcr.io/devcontainers/features/docker-outside-of-docker:1": {
       "version": "latest"
+    },
+    // gh: the base image does not ship the GitHub CLI (`gh auth login` in
+    // the README would fail without it). The feature installs the official
+    // release for the container's arch (amd64/arm64), independent of the
+    // stale gh in Ubuntu's archive.
+    "ghcr.io/devcontainers/features/github-cli:1": {
+      "version": "latest"
     }
   },
   "postCreateCommand": "bash .devcontainer/post-create.sh",

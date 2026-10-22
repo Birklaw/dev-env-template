@@ -243,11 +243,16 @@ the project dir) is rebuilt by `post-create.sh` + dotfiles on recreation, so
   dropped.
 - **Dotfiles** are applied by DevPod to every workspace. Change with:
   `devpod context set-options -o DOTFILES_URL=... -o DOTFILES_SCRIPT=...`
-- **GitHub auth inside containers:** `gh auth login` on the host does **not**
-  propagate into devcontainers. Git over SSH works via agent forwarding
-  (`ssh-add` your key on the host); for HTTPS/`gh` inside a container, run
-  `gh auth login` there once (auth persists in the container's home until
-  recreation).
+- **GitHub auth inside containers:** the template installs `gh` in every
+  container (the `github-cli` devcontainer feature; the base image does not
+  ship it). `gh auth login` on the host does **not** propagate into
+  devcontainers. Git over SSH works via agent forwarding (`ssh-add` your key
+  on the host); for HTTPS/`gh` inside a container, run `gh auth login` there
+  once and paste the same fine-grained PAT the dotfiles installer asks for
+  (or pipe it with `gh auth login --with-token`). Auth persists in the
+  container's home until recreation. Do **not** run `gh auth setup-git` in
+  that flow: it would replace the `store` credential helper the dotfiles
+  installer deliberately configures for github.com.
 - **ARM64 hosts** (e.g. Orange Pi 5B under Armbian): every component ships
   native aarch64 Linux builds — docker-ce and gh via their arm64-publishing
   apt repos, DevPod's `linux-arm64` binary, and the whole
