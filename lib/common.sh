@@ -100,6 +100,31 @@ install_nerd_font() {
   rm -rf "$NF_TMP"
 }
 
+# ---------- host browser (chrome-devtools MCP) ----------
+# The dotfiles ship a host-only chrome-devtools MCP entry that launches
+# /usr/bin/chromium headless with --allowedUrlPattern restricted to localhost
+# (see dotfiles pi/mcp.json). The allowlist is enforced by Chromium 149+; on
+# older builds the flag is accepted but does not restrict anything, which would
+# leave a silent false sense of containment. Warn loudly instead — non-fatal,
+# because browser testing is optional and must never block a host bootstrap.
+verify_host_browser() {
+  local bin="/usr/bin/chromium" major
+  if [ ! -x "$bin" ]; then
+    echo "WARNING: $bin is missing — the chrome-devtools MCP server (dotfiles" >&2
+    echo "         pi/mcp.json) will not start. Install chromium, or point" >&2
+    echo "         --executablePath at an installed Chrome/Chromium." >&2
+    return
+  fi
+  # "Chromium 154.0.8037.92 built on ..." -> 154
+  major="$("$bin" --version 2>/dev/null | grep -oE '[0-9]+' | head -1 || true)"
+  if [ -z "$major" ] || [ "$major" -lt 149 ]; then
+    echo "WARNING: chromium ${major:-unknown} < 149 — the MCP config's" >&2
+    echo "         --allowedUrlPattern allowlist is a no-op on this build, so the" >&2
+    echo "         agent browser is NOT restricted to localhost. Upgrade chromium" >&2
+    echo "         or remove that flag from ~/.pi/agent/mcp.json knowingly." >&2
+  fi
+}
+
 # ---------- mise + shared toolset ----------
 run_toolchain_install() {
   # Single source of truth for the toolchain (mise-managed tools + agent

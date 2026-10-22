@@ -14,7 +14,12 @@ command -v dnf &>/dev/null || { echo "ERROR: not a dnf-based host" >&2; exit 1; 
 # Containers get build-essential from the devcontainers base image.
 # tmux: the dotfiles .tmux.conf assumes it (truecolor/undercurl passthrough
 # for LazyVim) — not mise-managed, so it comes from the system package manager.
-sudo dnf install -y git curl gh vim-enhanced gcc make tmux
+# chromium: the browser behind the host-only chrome-devtools MCP entry (see
+# verify_host_browser); it runs headless on the host and talks to a workspace's
+# forwarded dev-server port. Fedora's chromium is the arm64-capable install —
+# Google ships no Linux arm64 Chrome — and tracks current versions, which the
+# MCP's --allowedUrlPattern needs (149+).
+sudo dnf install -y git curl gh vim-enhanced gcc make tmux chromium
 
 # ---------- system libs for native Node.js / pnpm binaries ----------
 # Some ARM Fedora images (especially aarch64 on cloud/edge devices) strip
@@ -38,6 +43,11 @@ configure_devpod
 
 # ---------- Nerd Font symbols ----------
 install_nerd_font
+
+# ---------- host browser for the chrome-devtools MCP ----------
+# Installed above with the base packages; this only checks the version the
+# MCP's URL allowlist depends on.
+verify_host_browser
 
 # ---------- mise + shared toolset ----------
 run_toolchain_install

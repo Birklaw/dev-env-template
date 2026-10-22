@@ -60,8 +60,12 @@ esac
 # compiler tree-sitter needs for nvim parsers); fontconfig serves fc-cache
 # and xz-utils the tar -xJf in the nerd-font step, both absent on minimal
 # Armbian/Debian images.
+# chromium: the browser behind the host-only chrome-devtools MCP entry (see
+# verify_host_browser). Debian publishes arm64 builds and trixie's is 154.x,
+# which the MCP's --allowedUrlPattern requires (149+); Google ships no Linux
+# arm64 Chrome, so the distro package is the only pinned-free option here.
 sudo apt-get update
-$APT install -y ca-certificates curl fontconfig xz-utils git vim build-essential tmux
+$APT install -y ca-certificates curl fontconfig xz-utils git vim build-essential tmux chromium
 
 # ---------- system libs for native Node.js / pnpm binaries ----------
 # Minimal ARM images can lack libatomic, causing "libatomic.so.1: cannot
@@ -122,6 +126,11 @@ configure_devpod
 
 # ---------- Nerd Font symbols ----------
 install_nerd_font
+
+# ---------- host browser for the chrome-devtools MCP ----------
+# Installed above with the base packages; this only checks the version the
+# MCP's URL allowlist depends on.
+verify_host_browser
 
 # ---------- mise + shared toolset ----------
 run_toolchain_install

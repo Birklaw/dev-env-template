@@ -119,6 +119,69 @@ If you ever do want a GUI editor, any DevPod-supported IDE can be attached
 per-project with `--ide <name>` (`devpod ide list`); the template itself stays
 editor-agnostic and ships no extension list.
 
+### Browser testing: browser on the host, app in the container
+
+UI work needs a real browser. It runs **on the host**, against the workspace's
+forwarded dev-server port — not inside the container:
+
+```bash
+# 1. workspace running (as usual)
+devpod up ~/my-project --ide none
+# 2. hold a forwarding session, with a stable local port for this project
+devpod ssh -L 3000:localhost:3000 my-project      # leave it open in a tmux pane
+# 3. Pi + chromium on the HOST, in the mounted project dir
+cd ~/my-project && pi
+```
+
+Why this split:
+
+- **The container has no browser and stays that way.** Nothing container-side
+  reaches the host's forwarded ports, so a workspace agent cannot see another
+  project's dev server. In-container Pi deliberately gets no chrome-devtools
+  MCP entry (the dotfiles installer skips it under DevPod).
+- **Container isolation is not a security boundary here anyway** — the
+  container holds the host's Docker socket and forwarded SSH agent (see Notes),
+  so "run the browser in the box" buys tidiness, not containment. What it does
+  cost is fidelity: headless-in-container loses host fonts and has to disable
+  the Chrome sandbox.
+- **The host browser is still restricted.** `chromium` is installed by
+  bootstrap; the dotfiles `pi/mcp.json` launches it headless, `--isolated`
+  (temporary profile, wiped on close), and with `--allowedUrlPattern` limited
+  to `http://localhost:*`, `http://127.0.0.1:*` and `about:*`. No external
+  hosts, no tailnet, no metadata endpoint, no `file://`.
+
+Consequences worth knowing before you debug the wrong layer:
+
+- **Forwarding only exists while an ssh session is up.** DevPod has no
+  `up --forwardPorts`; ports come from `devpod ssh` (auto-detected) or an
+  explicit `-L`. A stable explicit port per project also keeps the allowlist
+  meaningful and avoids two workspaces fighting over `localhost:3000`.
+- **External subresources are blocked.** Pages that load CDNs, web fonts or a
+  remote API will fail under the allowlist. Widen it per project with a
+  `.pi/mcp.json` that repeats the entry with the extra pattern — a project
+  entry replaces the user-level one of the same name:
+
+  ```json
+  {"mcpServers": {"chrome-devtools": {
+    "command": "npx",
+    "args": ["-y", "chrome-devtools-mcp@1.10.1", "--headless", "--isolated",
+             "--executablePath", "/usr/bin/chromium",
+             "--allowedUrlPattern", "http://localhost:3000/*",
+             "--allowedUrlPattern", "https://api.staging.example.com/*"]
+  }}}
+  ```
+
+- **Logins do not survive a session** (`--isolated`). If a project needs a
+  persisted dev login, override with `--userDataDir ~/.cache/chrome-devtools-mcp/<project>`
+  in that project's `.pi/mcp.json`.
+- **Chromium ≥ 149 is required.** `verify_host_browser` warns at bootstrap if
+  the distro build is older, because the allowlist would then be a no-op while
+  still looking configured.
+- **The MCP server is pinned** (`chrome-devtools-mcp@1.10.1`) in the dotfiles
+  `pi/mcp.json`, not `@latest`: it is spawned from an unpinned supply chain
+  otherwise. Bump it there deliberately.
+- **No GUI.** The host is reached over ssh, so the browser is always headless;
+  screenshots are the verification surface, not a window you watch.
 ## What happens on `devpod up`
 
 Understanding the sequence makes the moving parts easy to debug:
