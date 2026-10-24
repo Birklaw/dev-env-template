@@ -118,7 +118,15 @@ if ! command -v docker &>/dev/null; then
   $APT install -y docker-ce docker-ce-cli containerd.io \
     docker-buildx-plugin docker-compose-plugin
 fi
+# Resolvers first (dockerd reads them at start), then start the daemon, then
+# put the bridge in a forwarding firewalld zone (no-op without firewalld), then
+# prove containers work.
+configure_docker_dns
 enable_docker
+ensure_docker_firewalld_forwarding
+if [ "${SKIP_CONTAINER_NETWORK_CHECK:-0}" != "1" ]; then
+  verify_container_network
+fi
 
 # ---------- devpod CLI + dotfiles defaults ----------
 install_devpod

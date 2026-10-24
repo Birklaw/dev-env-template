@@ -52,6 +52,231 @@ enable_docker() {
   sudo usermod -aG docker "$USER"
 }
 
+# ---------- container DNS (dockerd resolvers) ----------
+# dockerd fills every container's /etc/resolv.conf from the host's upstream
+# resolvers. With the systemd-resolved stub it logs
+#   detected 127.0.0.53 nameserver, assuming systemd-resolved,
+#   so using resolv.conf: /run/systemd/resolve/resolv.conf
+# and copies whatever a VPN/Tailscale put there. A tailnet stub such as
+# 100.100.100.100 exists only in the host's network namespace, so containers
+# cannot reach it and the first name lookup stalls (~40s) and fails -- which is
+# what `git clone` exit 128 and `curl: (6)` during `devpod up` really are.
+#
+# Warn by default. Write the override only when DOCKER_DNS is set, because it
+# changes Docker's DNS behaviour for every container on the host.
+configure_docker_dns() {
+  local upstream="${DOCKER_RESOLV_CONF:-/run/systemd/resolve/resolv.conf}"
+  local daemon_json="${DOCKER_DAEMON_JSON:-/etc/docker/daemon.json}"
+
+  [ -r "$upstream" ] || return 0
+  grep -qE '^nameserver[[:space:]]+(100\.100\.100\.100|100\.(6[4-9]|[7-9][0-9]|1[0-2][0-9])\.)' \
+    "$upstream" || return 0
+
+  if [ -e "$daemon_json" ]; then
+    echo "==> Container DNS: $daemon_json already exists; not touching it."
+    return 0
+  fi
+
+  if [ -n "${DOCKER_DNS:-}" ]; then
+    local dns_json
+    dns_json="$(printf '%s' "$DOCKER_DNS" |
+      tr ' ,' '\n\n' | sed '/^$/d' |
+      awk 'BEGIN { ORS = "" } { gsub(/"/, ""); printf "%s\"%s\"", (NR > 1 ? ", " : ""), $0 }')"
+    echo "==> Container DNS: pinning dockerd resolvers to: $DOCKER_DNS"
+    printf '{ "dns": [%s] }\n' "$dns_json" | sudo tee "$daemon_json" >/dev/null
+    if systemctl is-active --quiet docker; then
+      sudo systemctl restart docker
+    fi
+    echo "    [ok]   $daemon_json written"
+    return 0
+  fi
+
+  cat >&2 <<'EOF'
+    [warn]  containers will inherit a resolver only the host can reach
+            (a VPN/Tailscale stub in /run/systemd/resolve/resolv.conf).
+            Name resolution in containers will stall and fail, which surfaces
+            as `git clone` exit 128 / `curl: (6)` during `devpod up`.
+            Fix knowingly (host-wide, restarts containers):
+              sudo tee /etc/docker/daemon.json <<'JSON'
+              { "dns": ["194.242.2.2", "1.1.1.1"] }
+              JSON
+              sudo systemctl restart docker
+            Or rerun bootstrap with DOCKER_DNS="194.242.2.2 1.1.1.1".
+            Trade-off: *.ts.net MagicDNS names stop resolving in containers.
+EOF
+}
+
+# ---------- docker <-> firewalld forwarding ----------
+# Docker creates its `docker` zone at runtime and then logs
+#   Firewalld: docker zone already exists, returning
+# i.e. it never adds docker0 to it. An interface in no zone matches no policy,
+# so forwarded traffic from the bridge is rejected: containers cannot reach the
+# host or the internet ("Host is unreachable" / EHOSTUNREACH) while the daemon
+# itself looks healthy, because it pulls images over the host netns. Observed
+# on Fedora 44 with firewalld 2.4.4 + moby-engine 29.8.2.
+#
+# Fix: one accepting, forwarding zone containing docker0 and -- when present --
+# tailscale0, which makes the bridge hop intra-zone. tailscale0 matters while a
+# Tailscale exit node is active, because container traffic is then forwarded
+# into the tunnel (see the exit-node note in verify_container_network).
+#
+# Adding a zone file needs `firewall-cmd --reload`, and a reload drops Docker's
+# own rules, so Docker is restarted immediately afterwards. Runs before any
+# workspace exists. Idempotent: a re-run with everything in place changes
+# nothing and restarts nothing.
+ensure_docker_firewalld_forwarding() {
+  command -v firewall-cmd &>/dev/null || return 0
+  sudo docker info >/dev/null 2>&1 || return 0
+
+  local zone=docker
+  local zonefile="${DOCKER_FIREWALLD_ZONE_FILE:-/etc/firewalld/zones/docker.xml}"
+  local ifaces=() iface changed=0
+
+  ip link show docker0 &>/dev/null && ifaces+=(docker0)
+  ip link show tailscale0 &>/dev/null && ifaces+=(tailscale0)
+  if [ "${#ifaces[@]}" -eq 0 ]; then
+    echo "    [warn]  no docker0/tailscale0 interface; skipping firewalld zone setup" >&2
+    return 0
+  fi
+
+  if [ ! -f "$zonefile" ]; then
+    echo "==> Adding firewalld zone '$zone' for: ${ifaces[*]}"
+    local xml=('<?xml version="1.0" encoding="utf-8"?>' '<zone target="ACCEPT">' '  <forward/>')
+    for iface in "${ifaces[@]}"; do
+      xml+=("  <interface name=\"$iface\"/>")
+    done
+    xml+=('</zone>')
+    sudo install -d -m 0755 "$(dirname "$zonefile")"
+    printf '%s\n' "${xml[@]}" | sudo tee "$zonefile" >/dev/null
+    if [ ! -f "$zonefile" ]; then
+      echo "ERROR: could not write $zonefile" >&2
+      exit 1
+    fi
+    # Only reload when the running state is not already correct: a reload drops
+    # Docker's chains, and the following restart kills containers. On a re-run
+    # where a previous (runtime-only) fix is active, persist and do nothing else.
+    local missing=0
+    for iface in "${ifaces[@]}"; do
+      sudo firewall-cmd --zone="$zone" --query-interface="$iface" >/dev/null 2>&1 || missing=1
+    done
+    if [ "$missing" = 1 ]; then
+      sudo firewall-cmd --reload >/dev/null
+      sudo systemctl restart docker
+    else
+      echo "    [ok]   persisted; runtime already correct (applies on next reload/reboot)"
+    fi
+    changed=1
+  else
+    for iface in "${ifaces[@]}"; do
+      if ! sudo firewall-cmd --zone="$zone" --query-interface="$iface" >/dev/null 2>&1; then
+        sudo firewall-cmd --zone="$zone" --add-interface="$iface"
+        sudo firewall-cmd --permanent --zone="$zone" --add-interface="$iface" 2>/dev/null ||
+          echo "    [warn]  could not add $iface to zone '$zone' permanently" >&2
+        if ! sudo firewall-cmd --zone="$zone" --query-interface="$iface" >/dev/null 2>&1; then
+          echo "ERROR: $iface is still not in firewalld zone '$zone'" >&2
+          exit 1
+        fi
+        changed=1
+      fi
+    done
+  fi
+
+  if [ "$changed" = 1 ]; then
+    echo "    [ok]   firewalld zone '$zone' contains: ${ifaces[*]}"
+  else
+    echo "==> docker/firewalld forwarding: already configured (${ifaces[*]})"
+  fi
+}
+
+# ---------- container networking smoke test ----------
+# A container with no network turns every later step into a misleading error:
+# `git clone` exits 128 ("Could not resolve host") inside DevPod's dotfiles
+# step, which surfaces as "Error tunneling to container"; devcontainer feature
+# installs die on `curl: (6) Could not resolve host` 90 seconds into a build.
+# Testing it here means the bootstrap names the cause instead.
+#
+# The daemon (host netns) can pull images even when containers have no egress,
+# so a successful pull proves nothing. `sudo docker` is deliberate: on a fresh
+# host the user is not yet in the docker group (that needs a re-login).
+verify_container_network() {
+  local img="alpine:3" result dns egress
+
+  echo "==> Checking container networking..."
+  if ! sudo docker info >/dev/null 2>&1; then
+    echo "    [warn]  docker daemon not reachable; skipping container network check" >&2
+    return 0
+  fi
+  if ! sudo docker pull --quiet "$img" >/dev/null 2>&1; then
+    echo "    [warn]  could not pull $img; skipping container network check" >&2
+    return 0
+  fi
+
+  # Two independent layers, deliberately separated: name resolution (what the
+  # build/apt/pnpm steps hit first) and raw egress by IP (firewall/forwarding).
+  # busybox wget over plain HTTP keeps TLS and DNS out of the egress test.
+  result="$(sudo docker run --rm "$img" sh -c '
+    getent hosts github.com >/dev/null 2>&1 && printf "dns=ok " || printf "dns=fail "
+    wget -q -T8 -O /dev/null http://1.1.1.1/ >/dev/null 2>&1 && printf "egress=ok" || printf "egress=fail"
+  ' 2>/dev/null || true)"
+
+  if [ -z "$result" ]; then
+    echo "    [ERROR] could not run a container (no result from docker run)" >&2
+    echo "    Reproduce manually: sudo docker run --rm $img true" >&2
+    echo "    Skip this gate with SKIP_CONTAINER_NETWORK_CHECK=1 (not recommended)." >&2
+    exit 1
+  fi
+
+  dns=ok
+  egress=ok
+  case "$result" in *dns=fail*) dns=fail ;; esac
+  case "$result" in *egress=fail*) egress=fail ;; esac
+
+  if [ "$dns" = ok ] && [ "$egress" = ok ]; then
+    echo "    [ok]   containers resolve DNS and reach the internet"
+    return 0
+  fi
+
+  echo "    [ERROR] container networking is broken ($result)" >&2
+  if [ "$egress" = fail ]; then
+    cat >&2 <<'EOF'
+    Containers cannot reach the internet at all (not a DNS problem).
+    Two common causes, in this order:
+
+    1) firewalld: docker0 belongs to no zone, so the bridge hop is rejected.
+         firewall-cmd --get-zone-of-interface=docker0     # expect: docker
+       Rerun bootstrap (it configures the zone), or apply the fix by hand:
+         sudo firewall-cmd --reload && sudo systemctl restart docker
+
+    2) A VPN/Tailscale exit node blackholing local subnets, which includes the
+       docker bridge. Check the effective route:
+         ip route show table 52 | grep -E 'throw|dev tailscale0'
+       If the bridge subnet appears as `dev tailscale0`, the exit node is
+       blocking LAN/local traffic; enable LAN access (container traffic still
+       goes through the tunnel, only local subnets bypass it):
+         sudo tailscale set --exit-node-allow-lan-access=true
+
+    Debian-family without firewalld: check ufw instead:
+      sudo ufw status verbose
+EOF
+  else
+    cat >&2 <<'EOF'
+    Containers reach the internet by IP but cannot resolve names: they were
+    given a resolver they cannot use. A VPN/Tailscale DNS stub on the host
+    (e.g. 100.100.100.100) exists only in the host's network namespace, and
+    Docker copies it into every container. Give the daemon real resolvers:
+      sudo tee /etc/docker/daemon.json <<'JSON'
+      { "dns": ["1.1.1.1", "8.8.8.8"] }
+      JSON
+      sudo systemctl restart docker
+    Trade-off: *.ts.net MagicDNS names stop resolving inside containers.
+    The bootstrap writes this for you when run with
+    DOCKER_DNS="194.242.2.2 1.1.1.1".
+EOF
+  fi
+  echo "    Skip this gate with SKIP_CONTAINER_NETWORK_CHECK=1 (not recommended)." >&2
+  exit 1
+}
+
 # ---------- devpod CLI (architecture-aware) ----------
 install_devpod() {
   if ! command -v devpod &>/dev/null; then
