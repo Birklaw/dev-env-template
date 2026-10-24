@@ -78,10 +78,23 @@ configure_docker_dns() {
   fi
 
   if [ -n "${DOCKER_DNS:-}" ]; then
-    local dns_json
-    dns_json="$(printf '%s' "$DOCKER_DNS" |
-      tr ' ,' '\n\n' | sed '/^$/d' |
-      awk 'BEGIN { ORS = "" } { gsub(/"/, ""); printf "%s\"%s\"", (NR > 1 ? ", " : ""), $0 }')"
+    local dns_json="" entry
+    # Validate every entry as an IP literal before writing. A stray backslash
+    # or newline would produce invalid JSON and leave dockerd down after the
+    # restart below (and getent/dockerd would report it far from here).
+    local ipv4='^((25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])$'
+    local ipv6='^[0-9A-Fa-f]*:[0-9A-Fa-f:]*$'
+    for entry in $(printf '%s' "$DOCKER_DNS" | tr ' ,' '\n\n' | sed '/^$/d'); do
+      if ! printf '%s' "$entry" | grep -qE "$ipv4|$ipv6"; then
+        echo "ERROR: DOCKER_DNS entry is not an IP address: $entry" >&2
+        exit 1
+      fi
+      dns_json="${dns_json}${dns_json:+, }\"${entry}\""
+    done
+    if [ -z "$dns_json" ]; then
+      echo "ERROR: DOCKER_DNS was set but contained no address." >&2
+      exit 1
+    fi
     echo "==> Container DNS: pinning dockerd resolvers to: $DOCKER_DNS"
     printf '{ "dns": [%s] }\n' "$dns_json" | sudo tee "$daemon_json" >/dev/null
     if systemctl is-active --quiet docker; then
@@ -115,10 +128,13 @@ EOF
 # itself looks healthy, because it pulls images over the host netns. Observed
 # on Fedora 44 with firewalld 2.4.4 + moby-engine 29.8.2.
 #
-# Fix: one accepting, forwarding zone containing docker0 and -- when present --
-# tailscale0, which makes the bridge hop intra-zone. tailscale0 matters while a
-# Tailscale exit node is active, because container traffic is then forwarded
-# into the tunnel (see the exit-node note in verify_container_network).
+# Fix: an accepting, forwarding zone containing ONLY docker0. tailscale0 is
+# deliberately kept out of that zone: target="ACCEPT" would accept all traffic
+# to/from the tailnet interface (unfiltered host input) and <forward/> would
+# bridge the tailnet to the containers. Forwarding into the tunnel (needed while
+# a Tailscale exit node is active) is granted by a narrow firewalld *policy*
+# instead, which only affects forwarded traffic and leaves the tailnet's own
+# zone filtering intact.
 #
 # Adding a zone file needs `firewall-cmd --reload`, and a reload drops Docker's
 # own rules, so Docker is restarted immediately afterwards. Runs before any
@@ -130,61 +146,88 @@ ensure_docker_firewalld_forwarding() {
 
   local zone=docker
   local zonefile="${DOCKER_FIREWALLD_ZONE_FILE:-/etc/firewalld/zones/docker.xml}"
-  local ifaces=() iface changed=0
+  local changed=0
 
-  ip link show docker0 &>/dev/null && ifaces+=(docker0)
-  ip link show tailscale0 &>/dev/null && ifaces+=(tailscale0)
-  if [ "${#ifaces[@]}" -eq 0 ]; then
-    echo "    [warn]  no docker0/tailscale0 interface; skipping firewalld zone setup" >&2
+  if ! ip link show docker0 &>/dev/null; then
+    echo "    [warn]  no docker0 interface; skipping firewalld zone setup" >&2
     return 0
   fi
 
+  # ---- zone 'docker': docker0 only, accepting + forwarding ----
   if [ ! -f "$zonefile" ]; then
-    echo "==> Adding firewalld zone '$zone' for: ${ifaces[*]}"
-    local xml=('<?xml version="1.0" encoding="utf-8"?>' '<zone target="ACCEPT">' '  <forward/>')
-    for iface in "${ifaces[@]}"; do
-      xml+=("  <interface name=\"$iface\"/>")
-    done
-    xml+=('</zone>')
+    echo "==> Adding firewalld zone '$zone' for: docker0"
     sudo install -d -m 0755 "$(dirname "$zonefile")"
-    printf '%s\n' "${xml[@]}" | sudo tee "$zonefile" >/dev/null
+    printf '%s\n' \
+      '<?xml version="1.0" encoding="utf-8"?>' \
+      '<zone target="ACCEPT">' \
+      '  <forward/>' \
+      '  <interface name="docker0"/>' \
+      '</zone>' | sudo tee "$zonefile" >/dev/null
     if [ ! -f "$zonefile" ]; then
       echo "ERROR: could not write $zonefile" >&2
       exit 1
     fi
-    # Only reload when the running state is not already correct: a reload drops
-    # Docker's chains, and the following restart kills containers. On a re-run
-    # where a previous (runtime-only) fix is active, persist and do nothing else.
-    local missing=0
-    for iface in "${ifaces[@]}"; do
-      sudo firewall-cmd --zone="$zone" --query-interface="$iface" >/dev/null 2>&1 || missing=1
-    done
-    if [ "$missing" = 1 ]; then
-      sudo firewall-cmd --reload >/dev/null
-      sudo systemctl restart docker
-    else
-      echo "    [ok]   persisted; runtime already correct (applies on next reload/reboot)"
-    fi
     changed=1
-  else
-    for iface in "${ifaces[@]}"; do
-      if ! sudo firewall-cmd --zone="$zone" --query-interface="$iface" >/dev/null 2>&1; then
-        sudo firewall-cmd --zone="$zone" --add-interface="$iface"
-        sudo firewall-cmd --permanent --zone="$zone" --add-interface="$iface" 2>/dev/null ||
-          echo "    [warn]  could not add $iface to zone '$zone' permanently" >&2
-        if ! sudo firewall-cmd --zone="$zone" --query-interface="$iface" >/dev/null 2>&1; then
-          echo "ERROR: $iface is still not in firewalld zone '$zone'" >&2
-          exit 1
+  fi
+
+  # A previous revision put tailscale0 inside this ACCEPT zone. Remove it
+  # (runtime and persistent) so that over-permission does not survive a re-run.
+  if sudo firewall-cmd --zone="$zone" --query-interface=tailscale0 >/dev/null 2>&1; then
+    sudo firewall-cmd --zone="$zone" --remove-interface=tailscale0 >/dev/null 2>&1 || true
+    sudo firewall-cmd --permanent --zone="$zone" --remove-interface=tailscale0 >/dev/null 2>&1 || true
+    echo "    [fix]  removed tailscale0 from zone '$zone' (it was over-permissive)"
+    changed=1
+  fi
+
+  if ! sudo firewall-cmd --zone="$zone" --query-interface=docker0 >/dev/null 2>&1; then
+    sudo firewall-cmd --permanent --zone="$zone" --add-interface=docker0 >/dev/null 2>&1 ||
+      echo "    [warn]  could not add docker0 to zone '$zone' permanently" >&2
+    sudo firewall-cmd --zone="$zone" --add-interface=docker0 >/dev/null 2>&1 || true
+    changed=1
+  fi
+
+  # ---- narrow forwarding policy: zone 'docker' -> tailscale0's zone ----
+  # Only forwarded traffic between those zones is accepted; the host's own
+  # input on tailscale0 stays governed by whatever zone it already belongs to.
+  if ip link show tailscale0 &>/dev/null; then
+    if ! firewall-cmd --help 2>&1 | grep -q -- '--new-policy'; then
+      echo "    [warn]  firewalld is too old for policies; containers may not reach a Tailscale exit node" >&2
+    else
+      local policy=docker-tailscale-forward ts_zone egress_before="" policy_existed=0 recreate=0
+      ts_zone="$(sudo firewall-cmd --get-zone-of-interface=tailscale0 2>/dev/null | awk '{print $1}')"
+      if [ -z "$ts_zone" ] || [ "$ts_zone" = "$zone" ]; then
+        echo "    [warn]  cannot determine a distinct firewalld zone for tailscale0; skipping forward policy" >&2
+      else
+        if sudo firewall-cmd --permanent --get-policies 2>/dev/null | grep -qx "$policy"; then
+          policy_existed=1
+          # Empty when this firewalld does not support the query; in that case
+          # leave the policy alone rather than forcing a reload on every run.
+          egress_before="$(sudo firewall-cmd --permanent --policy="$policy" --list-egress-zones 2>/dev/null || true)"
         fi
-        changed=1
+        if [ "$policy_existed" = 0 ] || { [ -n "$egress_before" ] && [ "$egress_before" != "$ts_zone" ]; }; then
+          recreate=1
+        fi
+        if [ "$recreate" = 1 ]; then
+          if [ "$policy_existed" = 1 ]; then
+            sudo firewall-cmd --permanent --delete-policy="$policy" >/dev/null 2>&1 || true
+          fi
+          sudo firewall-cmd --permanent --new-policy="$policy" >/dev/null 2>&1 || true
+          sudo firewall-cmd --permanent --policy="$policy" --add-ingress-zone="$zone" >/dev/null 2>&1 || true
+          sudo firewall-cmd --permanent --policy="$policy" --add-egress-zone="$ts_zone" >/dev/null 2>&1 || true
+          sudo firewall-cmd --permanent --policy="$policy" --set-target=ACCEPT >/dev/null 2>&1 || true
+          echo "    [ok]   forward policy '$policy': zone '$zone' -> '$ts_zone'"
+          changed=1
+        fi
       fi
-    done
+    fi
   fi
 
   if [ "$changed" = 1 ]; then
-    echo "    [ok]   firewalld zone '$zone' contains: ${ifaces[*]}"
+    sudo firewall-cmd --reload >/dev/null
+    sudo systemctl restart docker
+    echo "    [ok]   firewalld reloaded; docker restarted"
   else
-    echo "==> docker/firewalld forwarding: already configured (${ifaces[*]})"
+    echo "==> docker/firewalld forwarding: already configured (docker0)"
   fi
 }
 
@@ -378,21 +421,65 @@ run_toolchain_install() {
 }
 
 # ---------- dotfiles on the host ----------
-# The dotfiles live as a sibling of this checkout (~/projects/dev-env-template
-# -> ~/projects/dotfiles), so the bootstrap works the same whether the repos
-# are cloned under ~/projects, ~/repos, or anywhere else.
-dotfiles_dir() {
-  local url="${DOTFILES_URL%/}"
-  printf '%s/%s\n' "$(dirname "$REPO_ROOT")" "$(basename "$url" .git)"
+# Reject a local or relative DOTFILES_URL. There is no host to compare against
+# in that form, so the origin check below cannot work, and a value such as
+# "../../.ssh" would redirect both the clone target and the script run from it.
+validate_dotfiles_url() {
+  case "$DOTFILES_URL" in
+    *://*|*@*:*) return 0 ;;
+  esac
+  echo "ERROR: DOTFILES_URL must be a git URL (https://, ssh://, git:// or user@host:path)." >&2
+  echo "       Refusing to treat it as a local path: $DOTFILES_URL" >&2
+  exit 1
 }
 
-# owner/repo, independent of ssh vs https, a user prefix, a trailing slash or
-# ".git" — used only to tell "our dotfiles clone" apart from "some other repo
-# at that path".
+# The dotfiles live as a sibling of this checkout (~/projects/dev-env-template
+# -> ~/projects/dotfiles), so the bootstrap works the same whether the repos
+# are cloned under ~/projects, ~/repos, or anywhere else. The name is checked
+# so a URL ending in ".." / "." cannot climb out of the parent dir.
+dotfiles_dir() {
+  local url="${DOTFILES_URL%/}" name
+  name="$(basename "$url" .git)"
+  case "$name" in
+    ""|.|..)
+      echo "ERROR: cannot derive a safe checkout name from DOTFILES_URL: $DOTFILES_URL" >&2
+      exit 1
+      ;;
+  esac
+  printf '%s/%s\n' "$(dirname "$REPO_ROOT")" "$name"
+}
+
+# host/owner/repo, independent of scheme (ssh vs https), a user prefix, a port,
+# a trailing slash or ".git". The HOST is part of the identity on purpose: a
+# same-named path on another host is not our repo. Comparing only owner/repo
+# would accept https://evil.example/Birklaw/dotfiles as "ours" and run it.
 dotfiles_slug() {
-  printf '%s\n' "$1" |
-    sed -E 's#^[a-z+]+://##; s#^[^/]*@##; s#:([^/])#/\1#g; s#/+$##; s#\.git$##' |
-    awk -F/ 'NF >= 2 { print tolower($(NF-1) "/" $NF) }'
+  local ref="$1" host="" path=""
+  case "$ref" in
+    *://*)
+      ref="${ref#*://}"
+      ref="${ref#*@}"
+      host="${ref%%/*}"
+      host="${host%%:*}"        # drop :port
+      path="${ref#*/}"
+      ;;
+    ?*@*:*)
+      ref="${ref#*@}"
+      host="${ref%%:*}"
+      path="${ref#*:}"
+      ;;
+    *:*)
+      host="${ref%%:*}"
+      path="${ref#*:}"
+      ;;
+    *)
+      path="$ref"
+      ;;
+  esac
+  path="${path#/}"
+  path="${path%.git}"
+  path="${path%/}"
+  printf '%s/%s\n' "${host,,}" "${path,,}"
 }
 
 # Clone the dotfiles if absent; otherwise report how the checkout relates to
@@ -404,11 +491,12 @@ dotfiles_slug() {
 # host. Only "nothing to apply" (no clone possible) is fatal.
 sync_dotfiles_repo() {
   local dir origin upstream counts ahead behind
+  validate_dotfiles_url
   dir="$(dotfiles_dir)"
 
   if [ ! -e "$dir" ]; then
     echo "==> Cloning dotfiles: $DOTFILES_URL -> $dir"
-    git clone --quiet "$DOTFILES_URL" "$dir"
+    git clone --quiet -- "$DOTFILES_URL" "$dir"
     return 0
   fi
   if [ ! -d "$dir/.git" ]; then
@@ -459,27 +547,46 @@ sync_dotfiles_repo() {
 # $HOME) and then verify the result. install.sh exits 0 even when a source
 # file is missing, so the symlink assertions are the real pass/fail gate.
 apply_host_dotfiles() {
-  local dir script path missing=0
+  local dir dir_real script_real path target missing=0
 
+  validate_dotfiles_url
   dir="$(dotfiles_dir)"
-  script="$dir/$DOTFILES_SCRIPT"
-  if [ ! -f "$script" ]; then
-    echo "ERROR: $script not found — cannot apply dotfiles to the host." >&2
+  dir_real="$(realpath -m -- "$dir")"
+  script_real="$(realpath -m -- "$dir/$DOTFILES_SCRIPT")"
+
+  # DOTFILES_SCRIPT is operator-supplied, so contain it to the checkout: ".."
+  # or an absolute path would otherwise execute an arbitrary file.
+  case "$script_real" in
+    "$dir_real"/*) ;;
+    *)
+      echo "ERROR: DOTFILES_SCRIPT resolves outside $dir_real: $script_real" >&2
+      echo "       Refusing to execute it; use a path inside the repo." >&2
+      exit 1
+      ;;
+  esac
+  if [ ! -f "$script_real" ]; then
+    echo "ERROR: $script_real not found — cannot apply dotfiles to the host." >&2
     echo "       Clone $DOTFILES_URL to $dir, or rerun with SKIP_DOTFILES=1." >&2
     exit 1
   fi
 
   echo
   echo "==> Applying dotfiles to $HOME (from $dir)"
-  ( cd "$dir" && bash "$DOTFILES_SCRIPT" )
+  # Pin DOTFILES_DIR so install.sh cannot pick a different clone (~/.dotfiles,
+  # ~/dotfiles) than the one just synced and verified here.
+  ( cd "$dir_real" && DOTFILES_DIR="$dir_real" bash "$script_real" )
 
   if [ -n "${DOTFILES_VERIFY_PATHS// /}" ]; then
     # shellcheck disable=SC2086 # word-splitting is the point: a space-separated list
     for path in $DOTFILES_VERIFY_PATHS; do
-      if [ ! -L "$HOME/$path" ]; then
-        echo "    [ERROR] $HOME/$path is not a symlink (dotfiles install incomplete)" >&2
-        missing=1
-      fi
+      target="$(readlink -f -- "$HOME/$path" 2>/dev/null || true)"
+      case "$target" in
+        "$dir_real"/*) ;;
+        *)
+          echo "    [ERROR] $HOME/$path is not a symlink into $dir_real (resolved: ${target:-missing})" >&2
+          missing=1
+          ;;
+      esac
     done
     if [ "$missing" -ne 0 ]; then
       echo "ERROR: dotfiles verification failed. Read the install output above," >&2

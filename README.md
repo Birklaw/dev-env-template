@@ -336,26 +336,37 @@ during a devcontainer feature build (`exit code: 2`). `Host is unreachable`
 from inside a container is the tell: a **reject**, not a timeout.
 
 The bootstrap writes `/etc/firewalld/zones/docker.xml` with `target="ACCEPT"`,
-`<forward/>`, `docker0` and — when it exists — `tailscale0`, then reloads
-firewalld and restarts Docker (a reload drops Docker's own chains):
+`<forward/>` and `docker0` only, then reloads firewalld and restarts Docker (a
+reload drops Docker's own chains):
 
 ```xml
 <zone target="ACCEPT">
   <forward/>
   <interface name="docker0"/>
-  <interface name="tailscale0"/>
 </zone>
 ```
+
+`tailscale0` is deliberately **not** in that zone: `target="ACCEPT"` would
+accept all traffic to/from the tailnet interface (unfiltered host input) and
+`<forward/>` would bridge the tailnet to the containers. Forwarding into the
+tunnel — needed while a Tailscale exit node is active — is granted by a narrow
+firewalld *policy* instead: `docker-tailscale-forward`, ingress zone `docker`,
+egress whatever zone `tailscale0` already belongs to, target `ACCEPT`. Only
+forwarded traffic between those two zones is accepted, so the tailnet's own
+zone filtering stays in place.
 
 Verify:
 
 ```bash
 firewall-cmd --get-zone-of-interface=docker0        # expect: docker
-docker run --rm alpine:3 sh -c 'wget -q -T8 -O /dev/null http://1.1.1.1/; echo $?'
+firewall-cmd --permanent --get-policies              # expect: docker-tailscale-forward
+firewall-cmd --zone=docker --query-interface=tailscale0   # expect: no
 ```
 
 Two caveats. If Tailscale is installed **after** the bootstrap, rerun it (it is
-idempotent) so `tailscale0` joins the zone. And any later
+idempotent) so the forward policy is created for `tailscale0`'s zone; the same
+run removes `tailscale0` from the `docker` zone if an earlier version of this
+script put it there. And any later
 `firewall-cmd --reload` — e.g. after a firewalld package update — flushes
 Docker's rules; restart Docker if containers suddenly lose their network.
 
@@ -389,8 +400,10 @@ ip route show table 52 | grep -E 'throw|dev tailscale0'
 `allow-lan` is required whenever the exit node is up; container internet
 traffic still goes through the tunnel (and is masked), only local subnets
 bypass it. It cannot be scoped to containers: the preference is host-wide.
-To stop containers reaching the LAN (or falling back to direct egress if the
-tunnel drops), add a firewalld policy rejecting `docker -> FedoraWorkstation`.
+The `docker-tailscale-forward` policy above is what lets containers use the
+tunnel at all. To stop containers reaching the LAN through it (or falling back
+to direct egress if the tunnel drops), narrow that policy's egress zone or
+delete it and accept that a Tailscale exit node is host-only.
 
 ### DNS: containers inherit a resolver they cannot use
 
