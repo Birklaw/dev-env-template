@@ -28,6 +28,10 @@ git clone https://github.com/Birklaw/dev-env-template.git
 cd dev-env-template
 ```
 
+Any parent directory works (`~/projects`, `~/repos`, ...). Bootstrap clones
+the **dotfiles as a sibling of this checkout** — `<parent>/dotfiles` — so
+wherever you put `dev-env-template`, the dotfiles land next to it.
+
 Cloning is unauthenticated (public repo, HTTPS). To **push** from a fresh
 host, pick one after cloning:
 
@@ -68,8 +72,61 @@ Installs: git/curl/gh (GitHub's upstream apt repo on Debian-family), tmux,
 libatomic (if missing), Docker (docker-ce on Debian-family), DevPod CLI,
 Nerd Font symbols (pinned + hash-verified, fontconfig fallback so the
 terminal font itself doesn't change), dotfiles defaults for DevPod, the
-mise toolchain + agent CLIs (via `template/setup-mise.sh`), and the skill
-packs (via `template/install-skills.sh`).
+mise toolchain + agent CLIs (via `template/setup-mise.sh`), the skill
+packs (via `template/install-skills.sh`), and finally **the dotfiles on the
+host itself** (see below).
+
+### Host dotfiles (cloned alongside this checkout)
+
+DevPod applies the dotfiles inside every container, but herdr, pi, tmux and
+nvim run *on the host*, and `pi/mcp.json` is deliberately host-only. So the
+bootstrap clones `DOTFILES_URL` to `<parent-of-this-repo>/dotfiles` and runs
+its `install.sh` as your user — no sudo, same script, one URL shared with
+DevPod so host and container cannot drift apart.
+
+It runs *after* the mise toolchain, because `install.sh`'s Neovim pre-warm
+needs a real `nvim`. Re-running bootstrap is safe: the checkout is synced,
+then the installer is re-applied idempotently.
+
+How the existing checkout is treated (it never merges and never discards
+work):
+
+| State of `<parent>/dotfiles` | Action |
+| --- | --- |
+| missing | `git clone $DOTFILES_URL` |
+| clean, behind `origin` | fast-forward pull |
+| clean, up to date | re-apply only |
+| dirty (uncommitted changes) | do not pull; apply the working tree as-is |
+| ahead of / diverged from `origin` | warn; do not pull; apply as-is |
+| origin is a different repo | warn; apply as-is |
+| `offline` (fetch fails) | warn; apply the local copy |
+
+After applying, every path in `DOTFILES_VERIFY_PATHS` must be a symlink or
+the bootstrap aborts. That gate exists because `install.sh` reports success
+even when a source file is missing (`[skip]` + exit 0), which once produced a
+host with a herdr-generated default config and no dotfiles at all.
+
+Knobs (environment variables, all optional):
+
+- `DOTFILES_URL` / `DOTFILES_SCRIPT` — repo and script; also feed DevPod's
+  `DOTFILES_URL`/`DOTFILES_SCRIPT` context options. Both have built-in
+  defaults (`https://github.com/Birklaw/dotfiles`, `install.sh`), so a plain
+  `./bootstrap.sh` needs no arguments; override by exporting the variable
+  (`DOTFILES_URL=... ./bootstrap.sh` — bootstrap `exec`s the target, so it
+  must be in the environment, not just a shell variable). The sibling
+  directory name follows the URL's basename (`dotfiles`).
+- `DOTFILES_VERIFY_PATHS` — space-separated `$HOME`-relative paths asserted
+  to be symlinks afterwards; set to `""` to disable.
+- `SKIP_DOTFILES=1` — skip the host-side clone/apply entirely (the DevPod
+  defaults are still configured).
+
+Two asymmetries worth knowing. First, the host uses your **working tree**
+(symlinks), while containers get a fresh **clone of the pushed branch** — so
+commit and push before expecting a dotfiles change to show up in a container.
+Second, apps that rewrite their own config (herdr writes through the symlink)
+edit the repo on the host but a throwaway clone in a container; re-check
+`git -C <parent>/dotfiles status` after changing such settings, and run
+`herdr server reload-config` if a herdr server is already running.
 
 **Then reboot** (a fresh login is often enough, but a reboot is the reliable
 way to get docker group membership picked up everywhere).
@@ -78,8 +135,24 @@ way to get docker group membership picked up everywhere).
 
 ```bash
 mkdir ~/my-project && cd ~/my-project
-cp -r ~/dev-env-template/template/. .
+cp -r ~/dev-env-template/template/. .    # trailing "/." also copies hidden entries (.devcontainer/)
 git init
+```
+
+`-r` and the trailing `/.` are both required, and they fail differently:
+
+- `template/*` (no `/.`): the shell expands `*` **before** `cp` runs, so
+  `.devcontainer/` is never in the argument list. `cp` exits 0 and prints
+  nothing — `-r` cannot help, it cannot copy an entry it was never given.
+- `template/.` without `-r`: `cp` sees a directory and fails loudly
+  (`-r not specified; omitting directory`), copying nothing.
+
+Either way DevPod falls back to language detection and gives you a stripped
+container, so verify the spec before going further:
+
+```bash
+test -f .devcontainer/devcontainer.json || echo "SPEC MISSING — re-copy"
+git status --short   # .devcontainer/ should be there, not deleted
 ```
 
 The copy places the container definition and its provisioning scripts
@@ -199,13 +272,17 @@ Understanding the sequence makes the moving parts easy to debug:
    skill packs (`install-skills.sh`), then applies your
    project's `mise.toml` pins if present. This is the slow step on first
    creation (~1–2 min); it does not re-run on subsequent starts.
-4. **Dotfiles** — DevPod clones your dotfiles repo *inside the container* and
-   runs the configured install script. The repo must be cloneable without
-   host credentials (public HTTPS, or SSH with agent forwarding). The script
+4. **Dotfiles (container)** — DevPod clones your dotfiles repo *inside the
+   container* and runs the configured install script. This is a fresh clone of
+   the pushed branch, independent of the host copy bootstrap applied; the repo
+   must be cloneable without host credentials (public HTTPS, or SSH with agent
+   forwarding). The script
    re-runs on every subsequent `devpod up` (clone skipped, install repeated),
    and its Neovim pre-warm is timeout-bounded (`NVIM_BOOTSTRAP_TIMEOUT`,
    default 30 min): a wedged headless bootstrap degrades to a warning + retry
-   instead of hanging `devpod up`.
+   instead of hanging `devpod up`. A failure here (including a `git clone`
+   that cannot resolve the host, which exits 128) surfaces as "Error tunneling
+   to container", because the agent waits for the dotfiles step.
 5. **No IDE attach** — with `--ide none`, DevPod stops after starting the
    container; connect with `devpod ssh`. (Any DevPod IDE can still be attached
    per-project with `--ide <name>`.)

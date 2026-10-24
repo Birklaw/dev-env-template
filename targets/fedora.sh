@@ -52,6 +52,16 @@ verify_host_browser
 # ---------- mise + shared toolset ----------
 run_toolchain_install
 
+# ---------- host dotfiles ----------
+# Runs after the toolchain so install.sh's Neovim pre-warm finds a real nvim.
+# The repo is cloned as a sibling of this checkout (~/projects/dev-env-template
+# -> ~/projects/dotfiles) and applied with the same URL DevPod uses inside
+# containers. Skip with SKIP_DOTFILES=1.
+if [ "${SKIP_DOTFILES:-0}" != "1" ]; then
+  sync_dotfiles_repo
+  apply_host_dotfiles
+fi
+
 echo "==> Fedora host bootstrap complete."
 echo "    Reboot (or log out/in) so docker group membership applies, then:"
 echo "      devpod up <path-or-git-url> --ide none"

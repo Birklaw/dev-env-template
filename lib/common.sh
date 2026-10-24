@@ -7,6 +7,21 @@
 # Repo root (this file is lib/common.sh) — reaches template/setup-mise.sh.
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
+# ---------- dotfiles (one URL, two consumers) ----------
+# DevPod applies the dotfiles INSIDE every container (DOTFILES_URL /
+# DOTFILES_SCRIPT via configure_devpod). The host needs them too: herdr, pi,
+# tmux and nvim all run here, and pi/mcp.json is deliberately host-only (see
+# verify_host_browser). Keeping a single URL for both paths means host and
+# container cannot drift apart; override it once, here or in the environment.
+DOTFILES_URL="${DOTFILES_URL:-https://github.com/Birklaw/dotfiles}"
+DOTFILES_SCRIPT="${DOTFILES_SCRIPT:-install.sh}"
+# Space-separated, relative to $HOME. Every path listed must be a symlink
+# after install.sh runs. This is the guard against install.sh's silent
+# failure mode: a missing source prints "[skip]" and still exits 0, so a
+# half-applied dotfiles repo otherwise looks like a successful bootstrap.
+# Set to "" to disable the check.
+DOTFILES_VERIFY_PATHS="${DOTFILES_VERIFY_PATHS:-.vimrc .tmux.conf .config/nvim .config/herdr/config.toml .pi/agent/AGENTS.md .pi/agent/mcp.json}"
+
 # ---------- preflight ----------
 # Bootstrap assumes a normal sudo user everywhere: scripts call `sudo ...`
 # and add "$USER" to the docker group. Fresh Armbian minimal images boot as
@@ -68,8 +83,8 @@ install_devpod() {
 configure_devpod() {
   devpod provider add docker 2>/dev/null || devpod provider use docker || true
   devpod context set-options \
-    -o DOTFILES_URL="https://github.com/Birklaw/dotfiles" \
-    -o DOTFILES_SCRIPT="install.sh"
+    -o DOTFILES_URL="$DOTFILES_URL" \
+    -o DOTFILES_SCRIPT="$DOTFILES_SCRIPT"
 }
 
 # ---------- Nerd Font symbols (icon glyphs for LazyVim/Neovim) ----------
@@ -135,4 +150,122 @@ run_toolchain_install() {
   bash "$REPO_ROOT/template/install-skills.sh"
   # Pi packages (providers) — likewise shared with .devcontainer/post-create.sh.
   bash "$REPO_ROOT/template/install-pi-packages.sh"
+}
+
+# ---------- dotfiles on the host ----------
+# The dotfiles live as a sibling of this checkout (~/projects/dev-env-template
+# -> ~/projects/dotfiles), so the bootstrap works the same whether the repos
+# are cloned under ~/projects, ~/repos, or anywhere else.
+dotfiles_dir() {
+  local url="${DOTFILES_URL%/}"
+  printf '%s/%s\n' "$(dirname "$REPO_ROOT")" "$(basename "$url" .git)"
+}
+
+# owner/repo, independent of ssh vs https, a user prefix, a trailing slash or
+# ".git" — used only to tell "our dotfiles clone" apart from "some other repo
+# at that path".
+dotfiles_slug() {
+  printf '%s\n' "$1" |
+    sed -E 's#^[a-z+]+://##; s#^[^/]*@##; s#:([^/])#/\1#g; s#/+$##; s#\.git$##' |
+    awk -F/ 'NF >= 2 { print tolower($(NF-1) "/" $NF) }'
+}
+
+# Clone the dotfiles if absent; otherwise report how the checkout relates to
+# its remote. Never merges and never discards work:
+#   clean + behind   -> fast-forward pull
+#   dirty            -> leave the working tree alone (host uses it as-is)
+#   ahead / diverged -> warn, leave it alone
+# Offline is a warning, not a failure: a stale local copy still configures the
+# host. Only "nothing to apply" (no clone possible) is fatal.
+sync_dotfiles_repo() {
+  local dir origin upstream counts ahead behind
+  dir="$(dotfiles_dir)"
+
+  if [ ! -e "$dir" ]; then
+    echo "==> Cloning dotfiles: $DOTFILES_URL -> $dir"
+    git clone --quiet "$DOTFILES_URL" "$dir"
+    return 0
+  fi
+  if [ ! -d "$dir/.git" ]; then
+    echo "ERROR: $dir exists but is not a git repository." >&2
+    echo "       Move it aside, or clone $DOTFILES_URL there manually, then rerun." >&2
+    exit 1
+  fi
+
+  echo "==> Dotfiles repo: $dir"
+  origin="$(git -C "$dir" remote get-url origin 2>/dev/null || true)"
+  if [ -n "$origin" ] && [ "$(dotfiles_slug "$origin")" != "$(dotfiles_slug "$DOTFILES_URL")" ]; then
+    echo "    [warn] origin is $origin, not $DOTFILES_URL" >&2
+    echo "           not pulling; applying the local copy as-is" >&2
+    return 0
+  fi
+  if [ -n "$(git -C "$dir" status --porcelain)" ]; then
+    echo "    [warn] uncommitted changes present; skipping update, applying working tree" >&2
+    return 0
+  fi
+  # Bounded: a dead network must not stall a bootstrap that is otherwise done.
+  if ! timeout 60 git -C "$dir" fetch --quiet origin 2>/dev/null; then
+    echo "    [warn] could not reach origin (offline?); applying local copy" >&2
+    return 0
+  fi
+  upstream="$(git -C "$dir" rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null || true)"
+  if [ -z "$upstream" ]; then
+    echo "    [warn] no upstream branch configured; cannot compare with origin" >&2
+    return 0
+  fi
+  # rev-list --left-right: left = commits only in HEAD (ahead),
+  # right = commits only in upstream (behind).
+  counts="$(git -C "$dir" rev-list --left-right --count "HEAD...$upstream")"
+  ahead="${counts%%[[:space:]]*}"
+  behind="${counts##*[[:space:]]}"
+  if [ "$ahead" -eq 0 ] && [ "$behind" -eq 0 ]; then
+    echo "    [ok]   up to date with $upstream"
+  elif [ "$ahead" -eq 0 ]; then
+    echo "    [pull] $behind commit(s) behind $upstream; fast-forwarding"
+    git -C "$dir" pull --ff-only --quiet
+  elif [ "$behind" -eq 0 ]; then
+    echo "    [warn] $ahead local commit(s) not pushed to $upstream; applying local copy" >&2
+  else
+    echo "    [warn] diverged from $upstream ($ahead ahead, $behind behind); not touching it" >&2
+  fi
+}
+
+# Run the dotfiles installer as the normal user (never sudo — it writes into
+# $HOME) and then verify the result. install.sh exits 0 even when a source
+# file is missing, so the symlink assertions are the real pass/fail gate.
+apply_host_dotfiles() {
+  local dir script path missing=0
+
+  dir="$(dotfiles_dir)"
+  script="$dir/$DOTFILES_SCRIPT"
+  if [ ! -f "$script" ]; then
+    echo "ERROR: $script not found — cannot apply dotfiles to the host." >&2
+    echo "       Clone $DOTFILES_URL to $dir, or rerun with SKIP_DOTFILES=1." >&2
+    exit 1
+  fi
+
+  echo
+  echo "==> Applying dotfiles to $HOME (from $dir)"
+  ( cd "$dir" && bash "$DOTFILES_SCRIPT" )
+
+  if [ -n "${DOTFILES_VERIFY_PATHS// /}" ]; then
+    # shellcheck disable=SC2086 # word-splitting is the point: a space-separated list
+    for path in $DOTFILES_VERIFY_PATHS; do
+      if [ ! -L "$HOME/$path" ]; then
+        echo "    [ERROR] $HOME/$path is not a symlink (dotfiles install incomplete)" >&2
+        missing=1
+      fi
+    done
+    if [ "$missing" -ne 0 ]; then
+      echo "ERROR: dotfiles verification failed. Read the install output above," >&2
+      echo "       fix the missing source in $dir, then rerun bootstrap." >&2
+      echo "       (Disable this gate with DOTFILES_VERIFY_PATHS=\"\".)" >&2
+      exit 1
+    fi
+    echo "    [ok]   verified symlinked paths: $DOTFILES_VERIFY_PATHS"
+  fi
+  if command -v herdr &>/dev/null; then
+    echo "    note: if a herdr server is already running, apply the new config with"
+    echo "          'herdr server reload-config' (herdr writes config at server start)."
+  fi
 }
