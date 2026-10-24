@@ -242,7 +242,11 @@ ensure_docker_firewalld_forwarding() {
 # so a successful pull proves nothing. `sudo docker` is deliberate: on a fresh
 # host the user is not yet in the docker group (that needs a re-login).
 verify_container_network() {
-  local img="alpine:3" result dns egress
+  # Pinned to the multi-arch index digest for alpine:3 (not a per-platform
+  # digest) so this runs unchanged on amd64 and arm64. Refresh deliberately:
+  # docker buildx imagetools inspect alpine:3
+  local img="alpine:3@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a"
+  local result dns egress
 
   echo "==> Checking container networking..."
   if ! sudo docker info >/dev/null 2>&1; then
@@ -256,10 +260,11 @@ verify_container_network() {
 
   # Two independent layers, deliberately separated: name resolution (what the
   # build/apt/pnpm steps hit first) and raw egress by IP (firewall/forwarding).
-  # busybox wget over plain HTTP keeps TLS and DNS out of the egress test.
+  # nc -z opens a TCP connection straight to the IP, so neither DNS nor TLS is
+  # involved (unlike wget against http://1.1.1.1/, which redirects to HTTPS).
   result="$(sudo docker run --rm "$img" sh -c '
     getent hosts github.com >/dev/null 2>&1 && printf "dns=ok " || printf "dns=fail "
-    wget -q -T8 -O /dev/null http://1.1.1.1/ >/dev/null 2>&1 && printf "egress=ok" || printf "egress=fail"
+    nc -z -w8 1.1.1.1 443 >/dev/null 2>&1 && printf "egress=ok" || printf "egress=fail"
   ' 2>/dev/null || true)"
 
   if [ -z "$result" ]; then
