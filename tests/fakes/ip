@@ -1,0 +1,65 @@
+#!/bin/bash
+echo "ip $*" >>"$SANDBOX/ip.calls"
+routes="$SANDBOX/ip.routes"
+rules="$SANDBOX/ip.rules"
+t100="$SANDBOX/ip.t100"
+touch "$routes" "$rules" "$t100"
+case "$1" in
+  -4)
+    if [ "$2" = "route" ] && [ "${3:-}" = "show" ]; then cat "$routes"; fi
+    exit 0
+    ;;
+  rule)
+    case "$2" in
+      show) cat "$rules"; exit 0 ;;
+      add) echo "5260: from $4 lookup $6" >>"$rules"; exit 0 ;;
+      del)
+        grep -vF "from $4 lookup 100" "$rules" >"$rules.tmp" || true
+        mv "$rules.tmp" "$rules"
+        exit 0
+        ;;
+    esac
+    ;;
+  route)
+    case "$2" in
+      show)
+        [ "${3:-}" = "table" ] && cat "$t100"
+        exit 0
+        ;;
+      replace)
+        if [ "$3" = "throw" ]; then
+          grep -v "^throw $4 " "$t100" >"$t100.tmp" || true
+          echo "throw $4 table 100" >>"$t100.tmp"
+          mv "$t100.tmp" "$t100"
+          exit 0
+        fi
+        grep -v '^default \|^blackhole ' "$t100" >"$t100.tmp" || true
+        if [ "$3" = "blackhole" ]; then
+          echo "blackhole default table 100" >>"$t100.tmp"
+        else
+          echo "default dev $5 table 100" >>"$t100.tmp"
+        fi
+        mv "$t100.tmp" "$t100"
+        exit 0
+        ;;
+      del)
+        if [ "$3" = "throw" ]; then
+          grep -v "^throw $4 " "$t100" >"$t100.tmp" || true
+          mv "$t100.tmp" "$t100"
+        fi
+        exit 0
+        ;;
+      flush) : >"$t100"; exit 0 ;;
+    esac
+    ;;
+  link)
+    if [ "${2:-}" = "show" ]; then
+      case "${3:-}" in
+        docker0) [ "${FAKE_LINK_DOCKER0:-1}" = "1" ] && exit 0 || exit 1 ;;
+        tailscale0) [ "${FAKE_LINK_TS:-1}" = "1" ] && exit 0 || exit 1 ;;
+      esac
+    fi
+    exit 0
+    ;;
+esac
+exit 0

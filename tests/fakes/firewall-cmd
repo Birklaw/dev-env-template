@@ -1,0 +1,78 @@
+#!/bin/bash
+echo "firewall-cmd $*" >>"$SANDBOX/fw.calls"
+rt="$SANDBOX/fw.rt_rules"
+perm="$SANDBOX/fw.perm_rules"
+zone="$SANDBOX/fw.zone"
+policies="$SANDBOX/fw.policies"
+touch "$rt" "$perm" "$zone" "$policies"
+
+scope=rt
+for a in "$@"; do [ "$a" = "--permanent" ] && scope=perm; done
+
+# Everything after "FORWARD 0" is the rule body.
+rule=""
+capture=0
+prev=""
+for a in "$@"; do
+  if [ "$prev" = "FORWARD" ] && [ "$a" = "0" ]; then capture=1; prev=""; continue; fi
+  [ "$capture" = 1 ] && rule="${rule:+$rule }$a"
+  prev="$a"
+done
+
+iface=""
+for a in "$@"; do
+  case "$a" in --query-interface=*|--add-interface=*|--remove-interface=*) iface="${a#*=}" ;; esac
+done
+
+case " $* " in
+  *" --help "*)
+    echo "  --direct --add-rule {ipv4|ipv6|eb} <table> <chain> <priority> <arg>..."
+    [ "${NO_QUERY_RULE:-0}" = "1" ] || echo "  --query-rule {ipv4|ipv6|eb} <table> <chain> <priority> <arg>..."
+    exit 0
+    ;;
+esac
+
+case "$*" in
+  *--query-rule*)
+    line="ipv4 filter FORWARD 0 $rule"
+    if [ "$scope" = perm ]; then grep -Fxq -- "$line" "$perm"; else grep -Fxq -- "$line" "$rt"; fi
+    exit $?
+    ;;
+  *--get-all-rules*)
+    if [ "$scope" = perm ]; then cat "$perm"; else cat "$rt"; fi
+    exit 0
+    ;;
+  *--add-rule*)
+    line="ipv4 filter FORWARD 0 $rule"
+    if [ "$scope" = perm ]; then echo "$line" >>"$perm"; else echo "$line" >>"$rt"; fi
+    exit 0
+    ;;
+  *--query-interface=*)
+    grep -qx "$iface" "$zone"
+    exit $?
+    ;;
+  *--remove-interface=*)
+    grep -vx "$iface" "$zone" >"$zone.tmp" || true
+    mv "$zone.tmp" "$zone"
+    exit 0
+    ;;
+  *--add-interface=*)
+    grep -qxF -- "$iface" "$zone" || echo "$iface" >>"$zone"
+    exit 0
+    ;;
+  *--get-policies*)
+    cat "$policies"
+    exit 0
+    ;;
+  *--delete-policy=*)
+    pol=""
+    for a in "$@"; do case "$a" in --delete-policy=*) pol="${a#*=}" ;; esac; done
+    grep -vx "$pol" "$policies" >"$policies.tmp" || true
+    mv "$policies.tmp" "$policies"
+    exit 0
+    ;;
+  *--reload*)
+    exit 0
+    ;;
+esac
+exit 0

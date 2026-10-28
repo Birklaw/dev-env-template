@@ -62,8 +62,12 @@ enable_docker() {
 # cannot reach it and the first name lookup stalls (~40s) and fails -- which is
 # what `git clone` exit 128 and `curl: (6)` during `devpod up` really are.
 #
-# Warn by default. Write the override only when DOCKER_DNS is set, because it
-# changes Docker's DNS behaviour for every container on the host.
+# Pin when a tailnet stub is detected: with the container egress guard below
+# (containers may only leave through the tunnel), a resolver reached over the
+# LAN would break every lookup. The default is 1.1.1.1 -- neutral, reachable
+# through any exit node. A Mullvad exit node's own resolver is
+# DOCKER_DNS="194.242.2.2 1.1.1.1"; DOCKER_DNS overrides, and
+# SKIP_DOCKER_DNS=1 restores the old warn-only behaviour.
 configure_docker_dns() {
   local upstream="${DOCKER_RESOLV_CONF:-/run/systemd/resolve/resolv.conf}"
   local daemon_json="${DOCKER_DAEMON_JSON:-/etc/docker/daemon.json}"
@@ -77,84 +81,121 @@ configure_docker_dns() {
     return 0
   fi
 
-  if [ -n "${DOCKER_DNS:-}" ]; then
-    local dns_json="" entry
-    # Validate every entry as an IP literal before writing. A stray backslash
-    # or newline would produce invalid JSON and leave dockerd down after the
-    # restart below (and getent/dockerd would report it far from here).
-    local ipv4='^((25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])$'
-    local ipv6='^[0-9A-Fa-f]*:[0-9A-Fa-f:]*$'
-    for entry in $(printf '%s' "$DOCKER_DNS" | tr ' ,' '\n\n' | sed '/^$/d'); do
-      if ! printf '%s' "$entry" | grep -qE "$ipv4|$ipv6"; then
-        echo "ERROR: DOCKER_DNS entry is not an IP address: $entry" >&2
-        exit 1
-      fi
-      dns_json="${dns_json}${dns_json:+, }\"${entry}\""
-    done
-    if [ -z "$dns_json" ]; then
-      echo "ERROR: DOCKER_DNS was set but contained no address." >&2
-      exit 1
-    fi
-    echo "==> Container DNS: pinning dockerd resolvers to: $DOCKER_DNS"
-    printf '{ "dns": [%s] }\n' "$dns_json" | sudo tee "$daemon_json" >/dev/null
-    if systemctl is-active --quiet docker; then
-      sudo systemctl restart docker
-    fi
-    echo "    [ok]   $daemon_json written"
+  if [ "${SKIP_DOCKER_DNS:-0}" = "1" ]; then
+    cat >&2 <<'EOF'
+    [warn]  SKIP_DOCKER_DNS=1: containers will inherit a resolver only the host
+            can reach (a VPN/Tailscale stub). Lookups will stall and fail, and
+            the container egress guard will not be able to help.
+            Re-run without SKIP_DOCKER_DNS, or set DOCKER_DNS to resolvers that
+            work outside the host's network namespace.
+EOF
     return 0
   fi
 
-  cat >&2 <<'EOF'
-    [warn]  containers will inherit a resolver only the host can reach
-            (a VPN/Tailscale stub in /run/systemd/resolve/resolv.conf).
-            Name resolution in containers will stall and fail, which surfaces
-            as `git clone` exit 128 / `curl: (6)` during `devpod up`.
-            Fix knowingly (host-wide, restarts containers):
-              sudo tee /etc/docker/daemon.json <<'JSON'
-              { "dns": ["194.242.2.2", "1.1.1.1"] }
-              JSON
-              sudo systemctl restart docker
-            Or rerun bootstrap with DOCKER_DNS="194.242.2.2 1.1.1.1".
-            Trade-off: *.ts.net MagicDNS names stop resolving in containers.
-EOF
+  # Neutral default (works through any exit node); DOCKER_DNS overrides.
+  # `-` not `:-`: an explicitly empty DOCKER_DNS is an error, not "use default".
+  local dns_list="${DOCKER_DNS-1.1.1.1}"
+  local dns_json="" entry
+  # Validate every entry as an IP literal before writing. A stray backslash or
+  # newline would produce invalid JSON and leave dockerd down after the restart
+  # below (and getent/dockerd would report it far from here).
+  local ipv4='^((25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])$'
+  local ipv6='^[0-9A-Fa-f]*:[0-9A-Fa-f:]*$'
+  for entry in $(printf '%s' "$dns_list" | tr ' ,' '\n\n' | sed '/^$/d'); do
+    if ! printf '%s' "$entry" | grep -qE "$ipv4|$ipv6"; then
+      echo "ERROR: DOCKER_DNS entry is not an IP address: $entry" >&2
+      exit 1
+    fi
+    dns_json="${dns_json}${dns_json:+, }\"${entry}\""
+  done
+  if [ -z "$dns_json" ]; then
+    echo "ERROR: DOCKER_DNS is set but empty. Unset it to pin 1.1.1.1, or use" >&2
+    echo "       SKIP_DOCKER_DNS=1 to leave container DNS alone." >&2
+    exit 1
+  fi
+  echo "==> Container DNS: pinning dockerd resolvers to: $dns_list"
+  # /etc/docker may not exist yet (nothing has written a daemon.json before),
+  # and `tee` will not create it. Without this the bootstrap aborts here,
+  # before docker is started and the egress guard is installed.
+  sudo install -d -m 0755 "$(dirname "$daemon_json")"
+  # ipv6: false is Docker's default; writing it down is the record for the
+  # egress guard, which is IPv4-only.
+  printf '{ "dns": [%s], "ipv6": false }\n' "$dns_json" | sudo tee "$daemon_json" >/dev/null
+  if ! sudo test -f "$daemon_json"; then
+    echo "ERROR: could not write $daemon_json" >&2
+    exit 1
+  fi
+  if systemctl is-active --quiet docker; then
+    sudo systemctl restart docker
+  fi
+  echo "    [ok]   $daemon_json written"
 }
 
-# ---------- docker <-> firewalld forwarding ----------
-# Docker creates its `docker` zone at runtime and then logs
-#   Firewalld: docker zone already exists, returning
-# i.e. it never adds docker0 to it. An interface in no zone matches no policy,
-# so forwarded traffic from the bridge is rejected: containers cannot reach the
-# host or the internet ("Host is unreachable" / EHOSTUNREACH) while the daemon
-# itself looks healthy, because it pulls images over the host netns. Observed
-# on Fedora 44 with firewalld 2.4.4 + moby-engine 29.8.2.
+# ---------- docker <-> forward rules ----------
+# Two separate problems are handled here:
 #
-# Fix: an accepting, forwarding zone containing ONLY docker0. tailscale0 is
-# deliberately kept out of that zone: target="ACCEPT" would accept all traffic
-# to/from the tailnet interface (unfiltered host input) and <forward/> would
-# bridge the tailnet to the containers. Forwarding into the tunnel (needed while
-# a Tailscale exit node is active) is granted by a narrow firewalld *policy*
-# instead, which only affects forwarded traffic and leaves the tailnet's own
-# zone filtering intact.
+# 1. docker0 has no firewalld zone (Docker creates its `docker` zone at runtime
+#    and then logs "Firewalld: docker zone already exists, returning", so it
+#    never adds its own interface). Unzoned ingress matches no policy and
+#    forwarded traffic is rejected: containers cannot reach the host or the
+#    internet while the daemon, pulling over the host netns, looks healthy.
+#    Observed on Fedora 44 (firewalld 2.4.4, moby-engine 29.8.2).
 #
-# Adding a zone file needs `firewall-cmd --reload`, and a reload drops Docker's
-# own rules, so Docker is restarted immediately afterwards. Runs before any
-# workspace exists. Idempotent: a re-run with everything in place changes
-# nothing and restarts nothing.
+# 2. Once container traffic is routed into a Tailscale exit node it has to be
+#    allowed through FORWARD for both the bridge and the tunnel. Direct FORWARD
+#    rules do that without touching how the tailnet's own input is filtered
+#    (target=ACCEPT on tailscale0 would accept every tailnet->host port).
+#
+# Zone `docker` therefore stays docker0-only, and tailscale0 is *removed* from
+# it if an earlier revision put it there. Bridge <-> bridge traffic is accepted
+# explicitly so per-project networks (br-*) keep working.
+#
+# Direct rules apply at runtime immediately; the persistent copies need a
+# reload, which drops Docker's chains, so a reload is followed by a Docker
+# restart. Idempotent: a converged host changes nothing and restarts nothing.
+# True when firewalld already has this direct rule. Prefers firewalld's own
+# query (r3: comparing `--get-all-rules` strings assumes verbatim echoing;
+# direct.xml does store args verbatim, but that is an implementation detail).
+# Falls back to a normalized comparison that strips the
+# "family table chain priority" prefix for older firewalld builds.
+_direct_rule_present() {
+  local scope="$1" rule="$2" all
+  if firewall-cmd --help 2>&1 | grep -q -- '--query-rule'; then
+    if [ "$scope" = "permanent" ]; then
+      sudo firewall-cmd --permanent --direct --query-rule ipv4 filter FORWARD 0 $rule >/dev/null 2>&1
+    else
+      sudo firewall-cmd --direct --query-rule ipv4 filter FORWARD 0 $rule >/dev/null 2>&1
+    fi
+    return
+  fi
+  if [ "$scope" = "permanent" ]; then
+    all="$(sudo firewall-cmd --permanent --direct --get-all-rules 2>/dev/null)"
+  else
+    all="$(sudo firewall-cmd --direct --get-all-rules 2>/dev/null)"
+  fi
+  printf '%s\n' "$all" |
+    awk '{$1 = $2 = $3 = $4 = ""; sub(/^ +/, ""); print}' |
+    grep -Fxq -- "$rule"
+}
+
 ensure_docker_firewalld_forwarding() {
   command -v firewall-cmd &>/dev/null || return 0
   sudo docker info >/dev/null 2>&1 || return 0
 
   local zone=docker
   local zonefile="${DOCKER_FIREWALLD_ZONE_FILE:-/etc/firewalld/zones/docker.xml}"
-  local changed=0
+  local changed=0 rule
 
   if ! ip link show docker0 &>/dev/null; then
-    echo "    [warn]  no docker0 interface; skipping firewalld zone setup" >&2
+    echo "    [warn]  no docker0 interface; skipping firewalld setup" >&2
     return 0
   fi
 
   # ---- zone 'docker': docker0 only, accepting + forwarding ----
-  if [ ! -f "$zonefile" ]; then
+  # /etc/firewalld is 0750 root:root on Fedora, so a plain `[ -f ]` cannot even
+  # stat inside zones/ as the normal user: it would report "missing" every run,
+  # rewrite the file and force a reload + Docker restart on every bootstrap.
+  if ! sudo test -f "$zonefile"; then
     echo "==> Adding firewalld zone '$zone' for: docker0"
     sudo install -d -m 0755 "$(dirname "$zonefile")"
     printf '%s\n' \
@@ -163,19 +204,17 @@ ensure_docker_firewalld_forwarding() {
       '  <forward/>' \
       '  <interface name="docker0"/>' \
       '</zone>' | sudo tee "$zonefile" >/dev/null
-    if [ ! -f "$zonefile" ]; then
+    if ! sudo test -f "$zonefile"; then
       echo "ERROR: could not write $zonefile" >&2
       exit 1
     fi
     changed=1
   fi
 
-  # A previous revision put tailscale0 inside this ACCEPT zone. Remove it
-  # (runtime and persistent) so that over-permission does not survive a re-run.
   if sudo firewall-cmd --zone="$zone" --query-interface=tailscale0 >/dev/null 2>&1; then
     sudo firewall-cmd --zone="$zone" --remove-interface=tailscale0 >/dev/null 2>&1 || true
     sudo firewall-cmd --permanent --zone="$zone" --remove-interface=tailscale0 >/dev/null 2>&1 || true
-    echo "    [fix]  removed tailscale0 from zone '$zone' (it was over-permissive)"
+    echo "    [fix]  removed tailscale0 from zone '$zone' (over-permissive input)"
     changed=1
   fi
 
@@ -186,48 +225,153 @@ ensure_docker_firewalld_forwarding() {
     changed=1
   fi
 
-  # ---- narrow forwarding policy: zone 'docker' -> tailscale0's zone ----
-  # Only forwarded traffic between those zones is accepted; the host's own
-  # input on tailscale0 stays governed by whatever zone it already belongs to.
-  if ip link show tailscale0 &>/dev/null; then
-    if ! firewall-cmd --help 2>&1 | grep -q -- '--new-policy'; then
-      echo "    [warn]  firewalld is too old for policies; containers may not reach a Tailscale exit node" >&2
-    else
-      local policy=docker-tailscale-forward ts_zone egress_before="" policy_existed=0 recreate=0
-      ts_zone="$(sudo firewall-cmd --get-zone-of-interface=tailscale0 2>/dev/null | awk '{print $1}')"
-      if [ -z "$ts_zone" ] || [ "$ts_zone" = "$zone" ]; then
-        echo "    [warn]  cannot determine a distinct firewalld zone for tailscale0; skipping forward policy" >&2
-      else
-        if sudo firewall-cmd --permanent --get-policies 2>/dev/null | grep -qx "$policy"; then
-          policy_existed=1
-          # Empty when this firewalld does not support the query; in that case
-          # leave the policy alone rather than forcing a reload on every run.
-          egress_before="$(sudo firewall-cmd --permanent --policy="$policy" --list-egress-zones 2>/dev/null || true)"
-        fi
-        if [ "$policy_existed" = 0 ] || { [ -n "$egress_before" ] && [ "$egress_before" != "$ts_zone" ]; }; then
-          recreate=1
-        fi
-        if [ "$recreate" = 1 ]; then
-          if [ "$policy_existed" = 1 ]; then
-            sudo firewall-cmd --permanent --delete-policy="$policy" >/dev/null 2>&1 || true
-          fi
-          sudo firewall-cmd --permanent --new-policy="$policy" >/dev/null 2>&1 || true
-          sudo firewall-cmd --permanent --policy="$policy" --add-ingress-zone="$zone" >/dev/null 2>&1 || true
-          sudo firewall-cmd --permanent --policy="$policy" --add-egress-zone="$ts_zone" >/dev/null 2>&1 || true
-          sudo firewall-cmd --permanent --policy="$policy" --set-target=ACCEPT >/dev/null 2>&1 || true
-          echo "    [ok]   forward policy '$policy': zone '$zone' -> '$ts_zone'"
-          changed=1
-        fi
-      fi
-    fi
+  # Legacy forward policy from an earlier revision: remove it, the direct rules
+  # below replace it and do not depend on zone membership of tailscale0.
+  if sudo firewall-cmd --permanent --get-policies 2>/dev/null | grep -qx docker-tailscale-forward; then
+    sudo firewall-cmd --permanent --delete-policy=docker-tailscale-forward >/dev/null 2>&1 || true
+    sudo firewall-cmd --delete-policy=docker-tailscale-forward >/dev/null 2>&1 || true
+    echo "    [fix]  removed legacy policy docker-tailscale-forward"
+    changed=1
   fi
 
+  # ---- direct FORWARD rules ----
+  # tailscale0 needs the tunnel hop; bridges need each other for per-project
+  # compose networks. The container egress guard (below) decides whether
+  # non-tunnel egress is permitted.
+  local rules=(
+    "-i docker0 -o tailscale0 -j ACCEPT"
+    "-i br-+ -o tailscale0 -j ACCEPT"
+    "-i tailscale0 -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT"
+    "-i docker0 -o br-+ -j ACCEPT"
+    "-i br-+ -o docker0 -j ACCEPT"
+    "-i br-+ -o br-+ -j ACCEPT"
+  )
+
+  for rule in "${rules[@]}"; do
+    # shellcheck disable=SC2086 # rule is a whitespace-separated iptables rule
+    if ! _direct_rule_present runtime "$rule"; then
+      # shellcheck disable=SC2086
+      sudo firewall-cmd --direct --add-rule ipv4 filter FORWARD 0 $rule >/dev/null
+      changed=1
+    fi
+    # shellcheck disable=SC2086
+    if ! _direct_rule_present permanent "$rule"; then
+      # shellcheck disable=SC2086
+      sudo firewall-cmd --permanent --direct --add-rule ipv4 filter FORWARD 0 $rule >/dev/null
+      changed=1
+    fi
+  done
+
   if [ "$changed" = 1 ]; then
+    echo "    [ok]   firewalld forward rules for docker0/br-*/tailscale0"
     sudo firewall-cmd --reload >/dev/null
     sudo systemctl restart docker
     echo "    [ok]   firewalld reloaded; docker restarted"
   else
-    echo "==> docker/firewalld forwarding: already configured (docker0)"
+    echo "==> docker/firewalld forwarding: already configured"
+  fi
+}
+
+# ---------- container egress guard ----------
+# Requirement: with a Tailscale exit node configured, container traffic must
+# not leave by any path except the tunnel; with the exit node switched off,
+# containers must work normally over the host's uplink.
+#
+# The logic lives in lib/container-egress-guard.sh (installed to
+# /usr/local/sbin) so it is lintable, diffable and testable as its own file;
+# this function only installs it plus the systemd oneshot + 5 s timer.
+#
+# Routing, not filtering: see the guard's header for the mechanism and its
+# fail-closed behaviour. The guard is IPv4-only, matching Docker's default
+# bridge; `enable_ipv6` would bypass it, so the bootstrap pins it off in
+# daemon.json and warns here if a network already has it on.
+#
+# Skip with SKIP_CONTAINER_EGRESS_GUARD=1.
+ensure_container_egress_guard() {
+  [ "${SKIP_CONTAINER_EGRESS_GUARD:-0}" = "1" ] && return 0
+  command -v systemctl &>/dev/null || return 0
+  command -v ip &>/dev/null || return 0
+
+  local source="$REPO_ROOT/lib/container-egress-guard.sh"
+  if [ ! -f "$source" ]; then
+    echo "ERROR: $source is missing" >&2
+    exit 1
+  fi
+
+  local script="${CONTAINER_EGRESS_GUARD_SCRIPT:-/usr/local/sbin/container-egress-guard}"
+  local unit="${CONTAINER_EGRESS_GUARD_UNIT:-/etc/systemd/system/container-egress-guard.service}"
+  local timer="${CONTAINER_EGRESS_GUARD_TIMER:-/etc/systemd/system/container-egress-guard.timer}"
+  local tunnel_absent="${CONTAINER_EGRESS_GUARD_TUNNEL_ABSENT:-block}"
+  local changed=0 tmp
+
+  case "$tunnel_absent" in
+    block | direct) ;;
+    *)
+      echo "ERROR: CONTAINER_EGRESS_GUARD_TUNNEL_ABSENT must be block or direct" >&2
+      exit 1
+      ;;
+  esac
+
+  if ! sudo cmp -s "$source" "$script" 2>/dev/null; then
+    sudo install -d -m 0755 "$(dirname "$script")"
+    sudo install -m 0755 "$source" "$script"
+    echo "==> Container egress guard installed: $script"
+    changed=1
+  fi
+
+  tmp="$(mktemp)"
+  cat >"$tmp" <<UNIT
+[Unit]
+Description=Keep Docker container egress inside the Tailscale exit node
+After=network-online.target docker.service tailscaled.service firewalld.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+Environment=CONTAINER_EGRESS_GUARD_TUNNEL_ABSENT=${tunnel_absent}
+ExecStart=${script}
+UNIT
+  if ! sudo cmp -s "$tmp" "$unit" 2>/dev/null; then
+    sudo install -d -m 0755 "$(dirname "$unit")"
+    sudo install -m 0644 "$tmp" "$unit"
+    changed=1
+  fi
+  rm -f "$tmp"
+
+  tmp="$(mktemp)"
+  cat >"$tmp" <<'TIMER'
+[Unit]
+Description=Reconcile the Docker container egress guard
+After=container-egress-guard.service
+
+[Timer]
+OnBootSec=10s
+OnUnitActiveSec=5s
+AccuracySec=1s
+
+[Install]
+WantedBy=timers.target
+TIMER
+  if ! sudo cmp -s "$tmp" "$timer" 2>/dev/null; then
+    sudo install -d -m 0755 "$(dirname "$timer")"
+    sudo install -m 0644 "$tmp" "$timer"
+    changed=1
+  fi
+  rm -f "$tmp"
+
+  if [ "$changed" = 1 ]; then
+    sudo systemctl daemon-reload
+    echo "==> Container egress guard: 5s reconcile, tunnel-absent=$tunnel_absent"
+  fi
+  sudo systemctl enable --now container-egress-guard.timer >/dev/null 2>&1 || true
+  sudo systemctl start container-egress-guard.service >/dev/null 2>&1 || true
+
+  # The guard is IPv4-only; a Docker network with IPv6 would bypass it.
+  if sudo docker info >/dev/null 2>&1; then
+    if sudo docker network inspect $(sudo docker network ls -q) \
+      --format '{{.Name}} {{.EnableIPv6}}' 2>/dev/null | grep -q ' true$'; then
+      echo "    [warn]  a Docker network has IPv6 enabled; container egress guard is IPv4-only" >&2
+    fi
   fi
 }
 
@@ -288,19 +432,27 @@ verify_container_network() {
   if [ "$egress" = fail ]; then
     cat >&2 <<'EOF'
     Containers cannot reach the internet at all (not a DNS problem).
-    Two common causes, in this order:
+    Diagnose in this order:
 
-    1) firewalld: docker0 belongs to no zone, so the bridge hop is rejected.
+    1) Container egress guard (expected cause when an exit node is configured):
+         sudo /usr/local/sbin/container-egress-guard    # reconcile now
+         ip rule show | grep 'lookup 100'               # one rule per bridge subnet
+         ip route show table 100                        # see below
+       `default dev tailscale0` pins container traffic to the tunnel, so a
+       broken tunnel breaks egress. `default blackhole` means the tunnel
+       interface is missing and the guard is failing closed; set
+       CONTAINER_EGRESS_GUARD_TUNNEL_ABSENT=direct before re-running bootstrap
+       to fall back to the uplink instead.
+
+    2) firewalld: docker0 belongs to no zone, so the bridge hop is rejected.
          firewall-cmd --get-zone-of-interface=docker0     # expect: docker
        Rerun bootstrap (it configures the zone), or apply the fix by hand:
          sudo firewall-cmd --reload && sudo systemctl restart docker
 
-    2) A VPN/Tailscale exit node blackholing local subnets, which includes the
-       docker bridge. Check the effective route:
+    3) Host <-> container / host <-> LAN only. Tailscale's exit node blackholes
+       the host's local subnets; the guard does not cover host-sourced traffic,
+       so the host cannot reach containers or the LAN with LAN access off:
          ip route show table 52 | grep -E 'throw|dev tailscale0'
-       If the bridge subnet appears as `dev tailscale0`, the exit node is
-       blocking LAN/local traffic; enable LAN access (container traffic still
-       goes through the tunnel, only local subnets bypass it):
          sudo tailscale set --exit-node-allow-lan-access=true
 
     Debian-family without firewalld: check ufw instead:
@@ -309,16 +461,14 @@ EOF
   else
     cat >&2 <<'EOF'
     Containers reach the internet by IP but cannot resolve names: they were
-    given a resolver they cannot use. A VPN/Tailscale DNS stub on the host
-    (e.g. 100.100.100.100) exists only in the host's network namespace, and
-    Docker copies it into every container. Give the daemon real resolvers:
-      sudo tee /etc/docker/daemon.json <<'JSON'
-      { "dns": ["1.1.1.1", "8.8.8.8"] }
-      JSON
-      sudo systemctl restart docker
-    Trade-off: *.ts.net MagicDNS names stop resolving inside containers.
-    The bootstrap writes this for you when run with
-    DOCKER_DNS="194.242.2.2 1.1.1.1".
+    given a resolver they cannot use (a VPN/Tailscale stub such as
+    100.100.100.100 only exists inside the host's network namespace). The
+    bootstrap pins /etc/docker/daemon.json by default when it detects that:
+      cat /etc/docker/daemon.json
+    If it is missing, re-run the bootstrap with DOCKER_DNS="1.1.1.1" (or
+    "194.242.2.2 1.1.1.1" for a Mullvad exit node). SKIP_DOCKER_DNS=1 leaves
+    container DNS untouched. Trade-off: *.ts.net MagicDNS names stop resolving
+    inside containers.
 EOF
   fi
   echo "    Skip this gate with SKIP_CONTAINER_NETWORK_CHECK=1 (not recommended)." >&2

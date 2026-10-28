@@ -124,6 +124,7 @@ fi
 configure_docker_dns
 enable_docker
 ensure_docker_firewalld_forwarding
+ensure_container_egress_guard
 if [ "${SKIP_CONTAINER_NETWORK_CHECK:-0}" != "1" ]; then
   verify_container_network
 fi

@@ -1,0 +1,13 @@
+#!/bin/bash
+echo "docker $*" >>"$SANDBOX/docker.calls"
+case "$1" in
+  info) exit 0 ;;
+  network)
+    case "$2" in
+      ls) echo net1 ;;
+      inspect) echo "bridge ${FAKE_DOCKER_IPV6:-false}" ;;
+    esac
+    exit 0
+    ;;
+esac
+exit 0

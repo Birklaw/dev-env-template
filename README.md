@@ -310,11 +310,12 @@ the project dir) is rebuilt by `post-create.sh` + dotfiles on recreation, so
 
 ## Container networking
 
-DevPod is only as good as the host's container network. Two independent
-failure modes look like something else entirely, and both are configured and
-verified by the bootstrap.
+DevPod is only as good as the host's container network. Three things can look
+like "devpod is broken" and are unrelated: the firewalld zone, a Tailscale
+exit node's routing, and DNS. The bootstrap configures the first two and pins
+the third, then proves the result with a smoke test.
 
-### `docker0` in no firewalld zone (Fedora)
+### `docker0` in no firewalld zone, and forward rules (Fedora)
 
 Docker creates its `docker` zone at runtime and then logs:
 
@@ -323,132 +324,163 @@ dockerd: Firewalld: docker zone already exists, returning
 ```
 
 i.e. it never adds `docker0` to it. An interface in no zone matches no
-firewalld policy, so forwarded traffic from the bridge is **rejected**:
+firewalld policy, so forwarded traffic from the bridge is **rejected**: the
+daemon looks healthy and image pulls work (they use the host's netns), and
+containers can talk to each other (pure L2), but containers cannot reach the
+host or the internet. Symptoms: `git clone` **exit 128** in DevPod's dotfiles
+step ("Error tunneling to container"), or `curl: (6) Could not resolve host`
+during a devcontainer feature build. `Host is unreachable` from inside a
+container is the tell: a **reject**, not a timeout.
 
-- the daemon looks healthy and image pulls work (they use the host's netns),
-- containers can talk to each other (pure L2 bridging),
-- but containers cannot reach the host **or** the internet.
+The bootstrap keeps zone `docker` (`target="ACCEPT"`, `<forward/>`) with
+**only `docker0`** in it — `tailscale0` is deliberately removed, because
+`target=ACCEPT` would accept every tailnet→host port. Forwarding needs are then
+met by direct FORWARD rules instead:
 
-In a workspace that surfaces as `git clone` failing with **exit 128** in
-DevPod's dotfiles step ("Could not resolve host: github.com", reported as
-"Error tunneling to container"), or as `curl: (6) Could not resolve host`
-during a devcontainer feature build (`exit code: 2`). `Host is unreachable`
-from inside a container is the tell: a **reject**, not a timeout.
-
-The bootstrap writes `/etc/firewalld/zones/docker.xml` with `target="ACCEPT"`,
-`<forward/>` and `docker0` only, then reloads firewalld and restarts Docker (a
-reload drops Docker's own chains):
-
-```xml
-<zone target="ACCEPT">
-  <forward/>
-  <interface name="docker0"/>
-</zone>
+```
+-i docker0 -o tailscale0 -j ACCEPT
+-i br-+    -o tailscale0 -j ACCEPT
+-i tailscale0 -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+-i docker0 -o br-+ -j ACCEPT
+-i br-+    -o docker0 -j ACCEPT
+-i br-+    -o br-+ -j ACCEPT
 ```
 
-`tailscale0` is deliberately **not** in that zone: `target="ACCEPT"` would
-accept all traffic to/from the tailnet interface (unfiltered host input) and
-`<forward/>` would bridge the tailnet to the containers. Forwarding into the
-tunnel — needed while a Tailscale exit node is active — is granted by a narrow
-firewalld *policy* instead: `docker-tailscale-forward`, ingress zone `docker`,
-egress whatever zone `tailscale0` already belongs to, target `ACCEPT`. Only
-forwarded traffic between those two zones is accepted, so the tailnet's own
-zone filtering stays in place.
+`br-+` covers the per-project bridges Docker creates (compose networks), not
+just `docker0`. The rules are added at runtime and permanently; a firewalld
+reload drops Docker's own chains, so the bootstrap reloads and restarts Docker
+only when something actually changed.
 
 Verify:
 
 ```bash
 firewall-cmd --get-zone-of-interface=docker0        # expect: docker
-firewall-cmd --permanent --get-policies              # expect: docker-tailscale-forward
-firewall-cmd --zone=docker --query-interface=tailscale0   # expect: no
+firewall-cmd --direct --get-all-rules | grep FORWARD
+docker run --rm alpine:3 sh -c 'getent hosts github.com; nc -z -w8 1.1.1.1 443'
 ```
 
-Two caveats. If Tailscale is installed **after** the bootstrap, rerun it (it is
-idempotent) so the forward policy is created for `tailscale0`'s zone; the same
-run removes `tailscale0` from the `docker` zone if an earlier version of this
-script put it there. And any later
-`firewall-cmd --reload` — e.g. after a firewalld package update — flushes
-Docker's rules; restart Docker if containers suddenly lose their network.
+Any later `firewall-cmd --reload` (e.g. after a firewalld update) flushes
+Docker's rules; restart Docker afterwards if containers lose their network. On
+Debian-family hosts firewalld is usually absent and this step is a no-op; if
+**ufw** is present it can block the same hop (`ufw status verbose`).
 
-On Debian-family hosts firewalld is normally absent, so this step is a no-op
-and `docker-ce` manages nftables itself. If **ufw** is installed the same
-class of failure appears; check `ufw status verbose` (the smoke test says so).
+### Container egress guard: no leak with an exit node, normal with it off
 
-### A Tailscale exit node blackholes local subnets — including the bridge
+Requirement: with a Tailscale exit node configured, container traffic must not
+leave by any path except the tunnel; with the exit node switched off,
+containers must work normally over the host's uplink.
 
-While an exit node is active, Tailscale's `ip rule` sends everything through
-its own table, and with LAN access **off** it installs the host's local
-subnets pointing at the tunnel:
+That is implemented as **routing**, not filtering. Every Docker bridge subnet
+gets an `ip rule` into table 100, whose only default route is `tailscale0`
+while an exit node is configured (`blackhole` if the tunnel interface is
+missing). With the exit node off the route is removed, the lookup finds nothing,
+and traffic falls through to the main table. Each bridge subnet also gets a
+`throw` route in table 100, so traffic between the workspace (`docker0`) and
+per-project compose networks (`br-*`) still takes the local bridge instead of
+the tunnel default. Routing was chosen over a firewalld
+REJECT because rule ordering between zones, policies and direct rules is not
+obvious and would need empirical verification; `ip route get` is directly
+checkable.
 
 ```
-$ ip route show table 52
-default        dev tailscale0
-172.17.0.0/16  dev tailscale0     # the docker bridge
-192.168.1.0/24 dev tailscale0     # the LAN
+ip rule show                          # from <bridge subnet> lookup 100
+ip route show table 100               # default dev tailscale0 (= masked)
+ip route get 192.168.1.1 from 172.17.0.2   # which table/path a container would use
 ```
 
-So host↔container and container→host are routed into the tunnel and die, while
-container↔container (L2) still works. This is a **routing** problem, not a
-firewall one — stopping firewalld changes nothing.
+The logic lives in `lib/container-egress-guard.sh` (linted, diffable, testable)
+and the bootstrap installs it as `/usr/local/sbin/container-egress-guard` plus a
+systemd oneshot + 5 s timer. Properties:
 
-```bash
-sudo tailscale set --exit-node-allow-lan-access=true
-ip route show table 52 | grep -E 'throw|dev tailscale0'
-#   throw 172.17.0.0/16   -> falls through to main -> dev docker0
-```
+- **Fail-closed**: if `tailscale debug prefs` cannot be read, egress stays in
+  the tunnel (containers lose internet rather than leak).
+- **Keyed on the preference, not the route**: `ExitNodeID` being set keeps the
+  guard active even if Tailscale briefly withdraws the exit-node route, so a
+  Mullvad outage does not fall back to direct egress.
+- **Bounded window**: toggling the exit node takes up to 5 s to follow, and a
+  *newly created* bridge subnet egresses via the uplink until the next
+  reconcile (~5 s). Run `sudo /usr/local/sbin/container-egress-guard` manually
+  and check `ip route show table 100` before relying on the state.
+- **IPv4 only**, matching Docker's default bridge. The bootstrap writes
+  `"ipv6": false` into `daemon.json` and warns if a Docker network has IPv6
+  enabled; v6 container egress would bypass this guard.
+- Applying it flushes table 100; nothing else should use that table.
+- It does **not** protect the host's own traffic, and it cannot survive a
+  container that has the Docker socket (which can run
+  `tailscale set --exit-node=`). See "trust boundary" below.
 
-`allow-lan` is required whenever the exit node is up; container internet
-traffic still goes through the tunnel (and is masked), only local subnets
-bypass it. It cannot be scoped to containers: the preference is host-wide.
-The `docker-tailscale-forward` policy above is what lets containers use the
-tunnel at all. To stop containers reaching the LAN through it (or falling back
-to direct egress if the tunnel drops), narrow that policy's egress zone or
-delete it and accept that a Tailscale exit node is host-only.
+Skip with `SKIP_CONTAINER_EGRESS_GUARD=1`. If the tunnel interface is missing
+while an exit node is configured, the guard fails closed (`blackhole`);
+`CONTAINER_EGRESS_GUARD_TUNNEL_ABSENT=direct` relaxes that to "use the uplink"
+when tailscaled is simply stopped.
 
 ### DNS: containers inherit a resolver they cannot use
 
 Docker copies the host's upstream resolvers into every container. With
-Tailscale (or another VPN) managing DNS, the host's
-`/run/systemd/resolve/resolv.conf` contains a stub such as `100.100.100.100`
-that exists only inside the host's network namespace. Containers cannot reach
-it, so every lookup stalls until timeout (~40s) and fails. dockerd logs the
-hand-off explicitly:
+Tailscale (or another VPN) managing DNS, `/run/systemd/resolve/resolv.conf`
+contains a stub such as `100.100.100.100` that exists only inside the host's
+network namespace. Containers cannot reach it, so every lookup stalls (~40 s)
+and fails. dockerd logs the hand-off:
 
 ```
 detected 127.0.0.53 nameserver, assuming systemd-resolved,
 so using resolv.conf: /run/systemd/resolve/resolv.conf
 ```
 
-The bootstrap only **warns** about this (it changes Docker's behaviour for
-every container). To have it write the pin, run:
+When a tailnet stub is detected the bootstrap pins
+`/etc/docker/daemon.json`, because with the egress guard active a resolver
+reached over the LAN would break every lookup. The default is `1.1.1.1`
+(neutral, reachable through any exit node) plus `"ipv6": false`. Overrides:
+
+- `DOCKER_DNS="a.b.c.d ..."` — different resolvers. For a Mullvad exit node:
+  `DOCKER_DNS="194.242.2.2 1.1.1.1"`.
+- `DOCKER_DNS=""` (empty) is an error, not "use the default".
+- `SKIP_DOCKER_DNS=1` — warn only (lookups will fail while the guard is active).
+- An existing `daemon.json` is never modified; remove it to let the bootstrap
+  write it.
+
+Trade-off: `*.ts.net` MagicDNS names stop resolving inside containers.
+
+### Trust boundary
+
+The workspace container has the host's Docker socket, passwordless sudo, and
+`label=disable`. It is host-root by design; the firewall and routing work above
+is about correctness and leak-prevention, not containment. A container that can
+reach the Docker socket can also disable the exit node, so "never leaks" is not
+an enforceable property against a compromised container.
+
+The smoke test separates the layers (name resolution vs egress by IP) so its
+message points at the right fix. Knobs:
+
+- `SKIP_CONTAINER_NETWORK_CHECK=1` — skip the smoke test (not recommended).
+- `SKIP_CONTAINER_EGRESS_GUARD=1` — do not install the egress guard.
+- `CONTAINER_EGRESS_GUARD_TUNNEL_ABSENT=block|direct` — see the guard section.
+- `DOCKER_DNS` / `SKIP_DOCKER_DNS` — see above.
+- `DOCKER_FIREWALLD_ZONE_FILE`, `DOCKER_DAEMON_JSON`, `DOCKER_RESOLV_CONF`,
+  `CONTAINER_EGRESS_GUARD_SCRIPT/_UNIT/_TIMER` — path overrides used by the
+  tests (they keep the suite away from `/etc`).
+
+### Verifying the guard
+
+The stub suite runs offline and needs no privileges:
 
 ```bash
-DOCKER_DNS="194.242.2.2 1.1.1.1" ./bootstrap.sh
+./tests/run.sh        # fake firewall-cmd/ip/tailscale/docker, temp paths only
 ```
 
-or do it by hand:
+On a real host, run the bootstrap with the exit node **on**, then:
 
 ```bash
-sudo tee /etc/docker/daemon.json >/dev/null <<'JSON'
-{ "dns": ["194.242.2.2", "1.1.1.1"] }
-JSON
-sudo systemctl restart docker
+sudo /usr/local/sbin/container-egress-guard
+ip rule show | grep 'lookup 100'      # one rule per bridge subnet
+ip route show table 100               # throws + default dev tailscale0
+docker run --rm alpine:3 wget -qO- https://am.i.mullvad.net/ip   # exit-node IP
 ```
 
-Trade-off: `*.ts.net` MagicDNS names stop resolving inside containers. (The
-template's `runArgs --dns` covers container **runtime** only; feature and
-image **builds** use the daemon's resolvers, which is why the daemon-level pin
-is the one that matters for `devpod up`.)
-
-The smoke test separates the two layers — name resolution versus egress by
-IP — so its message points at the right fix. Knobs:
-
-- `SKIP_CONTAINER_NETWORK_CHECK=1` — skip the smoke test (not recommended;
-the check exists to fail early instead of mid-workspace).
-- `DOCKER_DNS` — space/comma separated resolvers to pin in
-`/etc/docker/daemon.json` (written only when the file does not exist yet).
-- `DOCKER_FIREWALLD_ZONE_FILE` — override the zone path; exists so the
-function can be exercised without touching `/etc`.
+Switch the exit node off, wait for a tick, and confirm `ip route show table 100`
+is empty and the container reports the host's own address. Re-run the bootstrap
+and confirm it prints `already configured` and does **not** reload firewalld or
+restart Docker (that is the direct-rule idempotency contract).
 
 ## Layout
 
@@ -458,6 +490,8 @@ function can be exercised without touching `/etc`.
 | `targets/fedora.sh` | Fedora host base layer: dnf packages + docker |
 | `targets/debian.sh` | Debian-family/Armbian host base layer: apt, docker-ce, gh apt repo |
 | `lib/common.sh` | Distro-agnostic host steps (devpod, docker group, nerd font, mise) |
+| `lib/container-egress-guard.sh` | Container egress guard (installed to `/usr/local/sbin`) |
+| `tests/` | Stub-driven tests: `./tests/run.sh` (no sudo, no host mutation) |
 | `template/setup-mise.sh` | Shared toolchain installer — runs on the host and in every devcontainer |
 | `template/install-skills.sh` | Shared skill-pack installer — installs configured packs into Pi's global skills dir; runs on the host and in every devcontainer |
 | `template/install-pi-packages.sh` | Shared Pi package installer (providers/extensions) — runs on the host and in every devcontainer |

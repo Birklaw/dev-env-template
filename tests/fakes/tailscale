@@ -1,0 +1,6 @@
+#!/bin/bash
+case "${FAKE_TS_MODE:-on}" in
+  on) printf '{ "ExitNodeID": "abc123" }\n' ;;
+  off) printf '{ "ExitNodeID": "" }\n' ;;
+  fail) exit 1 ;;
+esac

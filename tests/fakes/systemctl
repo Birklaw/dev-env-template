@@ -1,0 +1,3 @@
+#!/bin/bash
+echo "systemctl $*" >>"$SANDBOX/systemctl.calls"
+exit 0
