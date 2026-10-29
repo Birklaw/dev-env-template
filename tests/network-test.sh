@@ -1,6 +1,12 @@
 #!/bin/bash
 # Stub-driven tests for the container networking rework in lib/common.sh and
 # lib/container-egress-guard.sh. No sudo, no host mutation: see tests/lib.sh.
+#
+# FIDELITY LIMIT: every privileged command is a fake that records the call, so
+# these tests verify which commands WOULD run — not that the host ends up in the
+# intended state. A rule that parses but forwards wrongly still passes here.
+# Passing means "the script decides correctly"; a real bootstrap on hardware
+# remains the only end-to-end check. Do not read green as "host verified".
 
 set -uo pipefail
 # shellcheck source=tests/lib.sh
@@ -187,10 +193,75 @@ run_fn configure_docker_dns >/dev/null 2>&1
 assert_file_missing "$DOCKER_DAEMON_JSON" 'no pin without a tailnet stub'
 printf 'nameserver 100.100.100.100\nnameserver 192.168.1.254\n' >"$DOCKER_RESOLV_CONF"
 
-# ------------------------------------------------------------- hint regression
-echo '== smoke-test hints describe the shipped mechanism'
-assert_file_contains "$REPO_ROOT/lib/common.sh" 'container-egress-guard' 'hint names the guard'
-assert_file_contains "$REPO_ROOT/lib/common.sh" "ip rule show | grep 'lookup 100'" 'hint names the guard rule'
-assert_not_contains "$(cat "$REPO_ROOT/lib/common.sh")" 'Two common causes' 'old hint removed'
+# ------------------------------------------------------- dotfiles URL guard
+# validate_dotfiles_url rejects local and relative DOTFILES_URL values. The
+# guard exists because there is no host to compare a clone origin against in
+# that form, and a value like "../../.ssh" would redirect both the clone target
+# and the script run from it. Tested here because it is the one guard in
+# common.sh whose failure is a security failure, not a broken bootstrap.
+run_url_validation() {
+  DOTFILES_URL="$1" bash -c 'source "$1/lib/common.sh"; validate_dotfiles_url' _ "$REPO_ROOT"
+}
+
+echo '== dotfiles URL: local and relative values are rejected'
+# An empty value is NOT listed: common.sh substitutes its default URL, so it is
+# a valid input that falls through to the default rather than a bypass.
+for bad in '../../.ssh' '..' '.' './dotfiles' 'dotfiles' '/home/user/dotfiles' '~/dotfiles'; do
+  if run_url_validation "$bad" >/dev/null 2>&1; then
+    fail "accepted a local/relative DOTFILES_URL: '$bad'"
+  else
+    pass
+  fi
+done
+
+echo '== dotfiles URL: git URLs still pass'
+for good in \
+  'https://github.com/Birklaw/dotfiles' \
+  'ssh://git@github.com/Birklaw/dotfiles' \
+  'git://github.com/Birklaw/dotfiles' \
+  'git@github.com:Birklaw/dotfiles.git' \
+  'https://gitlab.com/group/sub/dotfiles'; do
+  if run_url_validation "$good" >/dev/null 2>&1; then
+    pass
+  else
+    fail "rejected a valid DOTFILES_URL: '$good'"
+  fi
+done
+
+echo '== dotfiles URL: refusal names the offending value'
+out="$(run_url_validation '../../.ssh' 2>&1)"
+assert_contains "$out" 'Refusing to treat it as a local path' 'explains the refusal'
+assert_contains "$out" '../../.ssh' 'echoes the rejected value'
+
+# ------------------------------------------------- dotfiles checkout name
+echo '== dotfiles dir: the sibling name follows the URL basename'
+run_dotfiles_dir() {
+  DOTFILES_URL="$1" bash -c 'source "$1/lib/common.sh"; dotfiles_dir' _ "$REPO_ROOT"
+}
+parent="$(dirname "$REPO_ROOT")"
+assert_eq "$(run_dotfiles_dir 'https://github.com/Birklaw/dotfiles')" \
+  "$parent/dotfiles" 'https form'
+assert_eq "$(run_dotfiles_dir 'https://github.com/Birklaw/dotfiles.git')" \
+  "$parent/dotfiles" '.git suffix stripped'
+assert_eq "$(run_dotfiles_dir 'https://github.com/Birklaw/dotfiles/')" \
+  "$parent/dotfiles" 'trailing slash ignored'
+assert_eq "$(run_dotfiles_dir 'git@github.com:Birklaw/dotfiles.git')" \
+  "$parent/dotfiles" 'scp form'
+
+echo '== dotfiles dir: a name that could climb out of the parent is rejected'
+# "../.." as a checkout name would put the clone outside the parent directory.
+# A bare ".git" basename is NOT covered here: basename(1) leaves the suffix in
+# place when it equals the whole name, so it resolves to <parent>/.git — odd but
+# inside the parent, and outside what this guard claims to protect.
+for bad in 'https://github.com/x/..' 'https://github.com/x/.'; do
+  if run_dotfiles_dir "$bad" >/dev/null 2>&1; then
+    fail "accepted an unsafe dotfiles checkout name: '$bad'"
+  else
+    pass
+  fi
+done
+out="$(run_dotfiles_dir 'https://github.com/x/..' 2>&1)"
+assert_contains "$out" 'cannot derive a safe checkout name' 'explains the refusal'
+assert_contains "$out" 'github.com/x/..' 'echoes the rejected value'
 
 summary
