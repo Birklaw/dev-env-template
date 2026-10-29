@@ -163,7 +163,8 @@ git status --short   # .devcontainer/ should be there, not deleted
 ```
 
 The copy places the container definition and its provisioning scripts
-(`.devcontainer/`, `setup-mise.sh`, `install-skills.sh`) in the project.
+(`.devcontainer/`, `setup-mise.sh`, `install-skills.sh`,
+`install-pi-packages.sh`) in the project.
 These are read by the devcontainer's post-create hook — they are not part
 of your application code.
 
@@ -257,9 +258,9 @@ Consequences worth knowing before you debug the wrong layer:
 - **Chromium ≥ 149 is required.** `verify_host_browser` warns at bootstrap if
   the distro build is older, because the allowlist would then be a no-op while
   still looking configured.
-- **The MCP server is pinned** (`chrome-devtools-mcp@1.10.1`) in the dotfiles
-  `pi/mcp.json`, not `@latest`: it is spawned from an unpinned supply chain
-  otherwise. Bump it there deliberately.
+- **The MCP server is pinned** in the dotfiles `pi/mcp.json` (not `@latest`):
+  it is spawned from an unpinned supply chain otherwise. Bump it there
+  deliberately.
 - **No GUI.** The host is reached over ssh, so the browser is always headless;
   screenshots are the verification surface, not a window you watch.
 ## What happens on `devpod up`
@@ -276,9 +277,10 @@ Understanding the sequence makes the moving parts easy to debug:
 3. **`postCreateCommand`** — runs `.devcontainer/post-create.sh` inside the
    container: installs `libatomic1` if needed, runs `setup-mise.sh` (mise +
    global toolchain, isolated from project config), installs the configured
-   skill packs (`install-skills.sh`), then applies your
+   skill packs (`install-skills.sh`), installs the declared Pi packages
+   (`install-pi-packages.sh`), then applies your
    project's `mise.toml` pins if present. This is the slow step on first
-   creation (~1–2 min); it does not re-run on subsequent starts.
+   creation (~1–2 min).
 4. **Dotfiles (container)** — DevPod clones your dotfiles repo *inside the
    container* and runs the configured install script. This is a fresh clone of
    the pushed branch, independent of the host copy bootstrap applied; the repo
@@ -460,12 +462,24 @@ message points at the right fix. Knobs:
   `CONTAINER_EGRESS_GUARD_SCRIPT/_UNIT/_TIMER` — path overrides used by the
   tests (they keep the suite away from `/etc`).
 
-### Verifying the guard
+### Tests
 
-The stub suite runs offline and needs no privileges:
+`./tests/run.sh` runs the stub suite offline in seconds, with no sudo and no
+host mutation: `firewall-cmd`, `ip`, `tailscale`, `docker`, `systemctl` and
+`sudo` are fakes writing to a temp dir, so it is safe on any machine —
+including one whose networking you are mid-debugging.
+
+Run it **before** pointing a changed `lib/common.sh` or
+`lib/container-egress-guard.sh` at a real host: it exercises the decisions
+(which rules, which routes, which errors) without the failure mode that costs
+you the machine. It also covers the `DOTFILES_URL` guards in `lib/common.sh`.
+
+It proves **intent, not host state** — a rule that parses but forwards wrongly
+still passes — and nothing enforces it, because the repo has no CI. Running it
+is a habit; the end-to-end check remains a real bootstrap.
 
 ```bash
-./tests/run.sh        # fake firewall-cmd/ip/tailscale/docker, temp paths only
+./tests/run.sh
 ```
 
 On a real host, run the bootstrap with the exit node **on**, then:
@@ -513,8 +527,11 @@ restart Docker (that is the direct-rule idempotency contract).
   Pi packages via `pi install`, pinned to immutable refs. Each package is listed
   under `~/.pi/agent/` and records the source in `~/.pi/agent/settings.json`;
   nothing is vendored into this repo. **Credentials are not provisioned:**
-  they live in `~/.pi/agent/auth.json` and are set at runtime.
-  A devcontainer's home is ephemeral, so these will be reset.
+  they live in `~/.pi/agent/auth.json` and are set at runtime, and a
+  devcontainer's home is ephemeral, so they are reset on recreation.
+  `install-pi-packages.sh` prints each provider's setup step at the end of
+  every run, so per-provider instructions live there rather than being
+  duplicated here.
   Add or remove a package with one `install_pi_package` line in
   `template/install-pi-packages.sh`.
 - **LazyVim is the editor.** Neovim +
@@ -526,10 +543,9 @@ restart Docker (that is the direct-rule idempotency contract).
   Dotfiles `install.sh` runs the headless plugin + Mason sync — the pre-warm
   lives only there (NOT in `post-create.sh`, which runs before dotfiles are
   applied), timeout-bounded and re-applied on every `devpod up`; without it,
-  first `nvim` launch self-heals. Extras in use: python, go, typescript,
-  yaml, docker, terraform, helm, json, markdown + `dap.core` (debugging),
-  `test.core`, `editor.aerial`. `devcontainer.json` ships no extension list —
-  the container is editor-agnostic.
+  first `nvim` launch self-heals. The enabled extras are declared in the
+  dotfiles `nvim/lazyvim.json`, not here. `devcontainer.json` ships no
+  extension list — the container is editor-agnostic.
 - **Nerd Font icons** come from a symbols-only tarball (pinned, SHA-256
   hardcoded in `lib/common.sh`) installed user-local with a fontconfig
   fallback rule — the terminal's font setting does not change. If icons look
