@@ -27,6 +27,23 @@ if ! grep -q 'mise activate bash' ~/.bashrc 2>/dev/null; then
 fi
 eval "$("$MISE_BIN" activate bash)"
 
+# ---------- supply-chain policy ----------
+# Hold back freshly published releases, matching the dotfiles configs:
+# uv.toml `exclude-newer` and .npmrc/pnpm `min-release-age` are both 14 days.
+# mise's key is minimum_release_age (default is 24h) and it applies to version
+# *resolution* only: exact pins and versions recorded in mise.lock are not
+# filtered, so the gate protects `mise upgrade` and floating pins (node@24).
+#
+# locked_scopes must be global-only (mise ignores it in project config) and is
+# what makes a repo's `locked = true` work: by default locked mode enforces the
+# lockfile across global, project AND system scopes, so a project lock is
+# rejected for every tool that lives in the global config ("go@1.27 is not in
+# the lockfile"). Limiting it to `project` keeps locked mode meaning "this
+# repo's lock is complete" without inverting the global toolset, which floats
+# within its pins by design.
+mise settings set minimum_release_age "14d"
+mise settings set locked_scopes project
+
 # ---------- global toolset ----------
 # Shorthands resolve via the mise registry (core/aqua backends: precompiled,
 # checksum-verified). Pinned to the compatibility boundary rather than exact
@@ -50,7 +67,14 @@ mise use -g \
   kubectl@1.37 \
   helm@4 \
   k9s@0.51 \
-  terraform@1.16
+  terraform@1.16 \
+  flux2@2 \
+  sops@3.13 \
+  "github:home-operations/flate@0.6"
+# flux2: GitOps CLI (mise's flux2, the Flux v2 release line).
+# sops: secret encryption; 3.13 is the minor boundary (sops is pre-4.0).
+# flate: not in the mise registry — the GitHub backend verifies the release
+# checksum. Kept at the 0.x minor boundary like the other 0.x tools.
 
 # ---------- terminal IDE toolset (LazyVim) ----------
 # Neovim is the primary editor (LazyVim); runs on the VM and in every
