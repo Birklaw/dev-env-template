@@ -59,6 +59,17 @@ else
   echo "==> vim install step not required."
 fi
 
+# age: sops' companion for secret encryption (sops itself is mise-managed).
+# From the distro repo rather than mise on purpose: a small stable CLI whose
+# audited reference implementation ships in Ubuntu universe, so the distro
+# carries the security fixes. The base image does not ship it.
+if ! command -v age &>/dev/null; then
+  echo "==> Installing age..."
+  $APT install "${APT_OPTS[@]}" age </dev/null
+else
+  echo "==> age install step not required."
+fi
+
 # ---------- host locale ----------
 # devpod's ssh transport forwards the client's LANG/LC_* (ssh_config
 # SendEnv) into every container shell. The base image ships only C.UTF-8,

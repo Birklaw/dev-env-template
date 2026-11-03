@@ -64,8 +64,12 @@ esac
 # verify_host_browser). Debian publishes arm64 builds and trixie's is 154.x,
 # which the MCP's --allowedUrlPattern requires (149+); Google ships no Linux
 # arm64 Chrome, so the distro package is the only pinned-free option here.
+# age: sops' companion for secret encryption, from the distro repo rather than
+# mise on purpose — a small stable CLI whose audited reference implementation
+# ships in Debian main (trixie: 1.2.1), so the distro carries the security
+# fixes. Version drift does not affect sops interoperability.
 sudo apt-get update
-$APT install -y ca-certificates curl fontconfig xz-utils git vim build-essential tmux chromium
+$APT install -y ca-certificates curl fontconfig xz-utils git vim build-essential tmux chromium age
 
 # ---------- system libs for native Node.js / pnpm binaries ----------
 # Minimal ARM images can lack libatomic, causing "libatomic.so.1: cannot

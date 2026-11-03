@@ -14,12 +14,16 @@ command -v dnf &>/dev/null || { echo "ERROR: not a dnf-based host" >&2; exit 1; 
 # Containers get build-essential from the devcontainers base image.
 # tmux: the dotfiles .tmux.conf assumes it (truecolor/undercurl passthrough
 # for LazyVim) — not mise-managed, so it comes from the system package manager.
+# age: sops' companion for secret encryption. Deliberately from the distro
+# rather than mise (the registry has it): it is a small, stable CLI whose value
+# is the audited reference implementation, and the distro repo tracks the
+# security fixes. Version drift does not affect sops interoperability.
 # chromium: the browser behind the host-only chrome-devtools MCP entry (see
 # verify_host_browser); it runs headless on the host and talks to a workspace's
 # forwarded dev-server port. Fedora's chromium is the arm64-capable install —
 # Google ships no Linux arm64 Chrome — and tracks current versions, which the
 # MCP's --allowedUrlPattern needs (149+).
-sudo dnf install -y git curl gh vim-enhanced gcc make tmux chromium
+sudo dnf install -y git curl gh vim-enhanced gcc make tmux chromium age
 
 # ---------- system libs for native Node.js / pnpm binaries ----------
 # Some ARM Fedora images (especially aarch64 on cloud/edge devices) strip
