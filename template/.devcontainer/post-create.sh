@@ -14,7 +14,14 @@ APT="sudo env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a NEEDRESTART_SUSP
 
 # Apt robustness: lock timeout for concurrent apt (host bootstrap / sibling
 # containers), network timeouts + retries for flaky links (tailnet/VPN).
-APT_OPTS=(-y -q
+# --no-install-recommends: Recommends are optional by definition, so install
+# only what these steps actually declare. Today it changes nothing (none of
+# libatomic1/vim/locales/age recommend anything on noble: 29 packages either
+# way, verified by apt-get -s); it keeps a future package added to APT_OPTS
+# from silently pulling an unvetted dependency tree into the container.
+# If a package genuinely needs a Recommends, name it explicitly in the same
+# install line rather than dropping the flag.
+APT_OPTS=(-y -q --no-install-recommends
   -o DPkg::Lock::Timeout=120
   -o Acquire::http::Timeout=20
   -o Acquire::https::Timeout=20
