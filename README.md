@@ -4,8 +4,9 @@ Bootstrap a fresh Fedora VM or an Armbian/Debian-family host (tested:
 Orange Pi 5B, aarch64, Armbian Debian trixie) into a dev environment:
 Docker + DevPod on the host, per-project devcontainers built from
 `template/`, and a shared mise-managed toolchain (node, python, go, uv, pnpm,
-kubectl, helm, k9s, terraform) plus agent CLIs (herdr, pi) installed
-identically on the host and inside every container.
+kubectl, helm, k9s, terraform, flux2, sops, flate) plus agent CLIs (herdr, pi)
+installed identically on the host and inside every container. `age` and
+`chromium` come from the distro package manager; see [Notes](#notes).
 
 Editing is **terminal-first with LazyVim (Neovim)**: `neovim`, `lazygit`,
 `ripgrep`, `fd`, `fzf` and `tree-sitter` are mise-managed like everything
@@ -164,17 +165,46 @@ git status --short   # .devcontainer/ should be there, not deleted
 
 The copy places the container definition and its provisioning scripts
 (`.devcontainer/`, `setup-mise.sh`, `install-skills.sh`,
-`install-pi-packages.sh`) in the project.
+`install-pi-packages.sh`) plus a starting `mise.toml` in the project.
 These are read by the devcontainer's post-create hook — they are not part
 of your application code.
 
-Optional — pin project-specific tool versions in a `mise.toml`:
+Optional — pin project-specific tool versions in a `mise.toml`. A copy
+ships in `template/`, so a new project already has one:
 
 ```toml
 [tools]
 node = "20"
 python = "3.12"
 ```
+
+Name only what the project needs beyond the global toolset; naming a global
+tool pins that repo to a different version of it. The shipped file also
+carries the 14-day supply-chain setting (`minimum_release_age`) — the
+in-repo record of the same policy as `uv.toml`'s `exclude-newer` and the
+npm/pnpm `min-release-age` in the dotfiles repo.
+
+For a project that needs hard reproducibility, commit a lockfile:
+
+```bash
+mise lock            # resolve versions, record download URLs + checksums
+# then set in mise.toml: [settings] locked = true
+```
+
+Two things to know before enabling `locked = true`:
+
+- It needs `locked_scopes` to cover only the scopes you lock, and
+  `locked_scopes` is a **global-only** setting mise refuses in project
+  config. `setup-mise.sh` sets `locked_scopes = ["project"]` globally; on a
+  machine without it, locked mode also demands lockfile entries for every
+  global tool and fails with `go@1.27 is not in the lockfile`.
+- Removing a tool from `[tools]` leaves its lockfile entry behind until the
+  next `mise lock` prunes it.
+
+The template ships **no** `locked` and **no** committed `mise.lock`, on
+purpose: duplicating the global toolset into every project would freeze
+those versions (security updates only arrive on re-lock) and lock entries
+bypass `minimum_release_age` entirely.
 
 ## 4. Spin up the devcontainer
 
@@ -509,6 +539,7 @@ restart Docker (that is the direct-rule idempotency contract).
 | `template/setup-mise.sh` | Shared toolchain installer — runs on the host and in every devcontainer |
 | `template/install-skills.sh` | Shared skill-pack installer — installs configured packs into Pi's global skills dir; runs on the host and in every devcontainer |
 | `template/install-pi-packages.sh` | Shared Pi package installer (providers/extensions) — runs on the host and in every devcontainer |
+| `template/mise.toml` | Starting repo-level mise config (14d policy; add project pins here) — copied into each new project |
 | `template/.devcontainer/` | Copy into each new project: container definition + post-create hook |
 
 ## Notes
@@ -567,6 +598,24 @@ restart Docker (that is the direct-rule idempotency contract).
   than across it — bump a pin deliberately to move on. Global installs are
   isolated from project config (`setup-mise.sh` runs from `$HOME`), so a
   project's pins can never break the base toolchain.
+- **Supply-chain policy.** `setup-mise.sh` sets
+  `minimum_release_age = "14d"` globally, matching the dotfiles
+  `uv.toml` (`exclude-newer`) and npm/pnpm (`min-release-age`). mise holds
+  back releases younger than the cutoff when it *resolves* a version, so
+  `mise upgrade` and floating pins (`node@24`) stay 14 days behind
+  publishing; exact pins and `mise.lock` entries are never filtered. Two
+  consequences worth remembering: a lockfile is trusted as-is (refresh it
+  deliberately), and a brand-new tool release will not appear until it
+  ages past the cutoff.
+  `locked_scopes = ["project"]` is set alongside it so a repo's
+  `locked = true` means "this repo's lock is complete" rather than
+  "every global tool is in this lockfile".
+- **`age` is a distro package, not a mise tool** — even though the mise
+  registry has it. It is a small, stable CLI; the distro ships the audited
+  reference implementation and carries its security fixes, and version drift
+  does not affect sops interoperability. Installed by `targets/*.sh` on the
+  host and by `post-create.sh` in containers (Ubuntu 24.04 `universe`,
+  already enabled in the base image). `sops` itself is mise-managed (3.13).
 - **Docker runs on the host.** Containers use docker-outside-of-docker: the
   feature mounts the host socket to `/var/run/docker-host.sock` and proxies a
   permission-fixed `/var/run/docker.sock` (sibling containers, shared build
