@@ -15,9 +15,7 @@ APT="sudo env DEBIAN_FRONTEND=noninteractive NEEDRESTART_MODE=a NEEDRESTART_SUSP
 # Apt robustness: lock timeout for concurrent apt (host bootstrap / sibling
 # containers), network timeouts + retries for flaky links (tailnet/VPN).
 # --no-install-recommends: Recommends are optional by definition, so install
-# only what these steps actually declare. Today it changes nothing (none of
-# libatomic1/vim/locales/age recommend anything on noble: 29 packages either
-# way, verified by apt-get -s); it keeps a future package added to APT_OPTS
+# only what these steps actually declare. It keeps a future package added to APT_OPTS
 # from silently pulling an unvetted dependency tree into the container.
 # If a package genuinely needs a Recommends, name it explicitly in the same
 # install line rather than dropping the flag.
@@ -57,8 +55,7 @@ else
   echo "==> libatomic1 install step not required."
 fi
 
-# vim: the base image ships vim-tiny only (as vim.tiny, not even on PATH) —
-# install the full vim.
+# vim: install full vim; the base image ships vim-tiny only.
 if ! command -v vim &>/dev/null; then
   echo "==> Installing vim..."
   $APT install "${APT_OPTS[@]}" vim </dev/null
@@ -66,10 +63,7 @@ else
   echo "==> vim install step not required."
 fi
 
-# age: sops' companion for secret encryption (sops itself is mise-managed).
-# From the distro repo rather than mise on purpose: a small stable CLI whose
-# audited reference implementation ships in Ubuntu universe, so the distro
-# carries the security fixes. The base image does not ship it.
+# age: FluxCD recommendation for k8s secret encryption
 if ! command -v age &>/dev/null; then
   echo "==> Installing age..."
   $APT install "${APT_OPTS[@]}" age </dev/null
@@ -97,7 +91,7 @@ fi
 # ---------- base toolchain (mise + global tools) ----------
 bash "$REPO_ROOT/setup-mise.sh"
 
-# setup-mise.sh ran in a subshell; re-add mise to PATH for what follows.
+# setup-mise.sh runs in a subshell; re-add mise to PATH.
 export PATH="$HOME/.local/bin:$PATH"
 
 # ---------- skill packs for Pi ----------

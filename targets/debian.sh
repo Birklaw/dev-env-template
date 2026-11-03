@@ -9,7 +9,10 @@ set -euo pipefail
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/lib/common.sh"
 
 require_sudo_user
-command -v apt-get &>/dev/null || { echo "ERROR: not an apt-based host" >&2; exit 1; }
+command -v apt-get &>/dev/null || {
+  echo "ERROR: not an apt-based host" >&2
+  exit 1
+}
 
 APT="sudo DEBIAN_FRONTEND=noninteractive apt-get"
 
@@ -28,10 +31,10 @@ APT="sudo DEBIAN_FRONTEND=noninteractive apt-get"
 # the allowlist validates whatever comes out.
 if [ -f /etc/armbian-release ]; then
   # shellcheck disable=SC1091
-  . /etc/armbian-release          # marker present; distro fields optional
+  . /etc/armbian-release # marker present; distro fields optional
 fi
 # shellcheck disable=SC1091
-. /etc/os-release                 # ID, VERSION_CODENAME
+. /etc/os-release # ID, VERSION_CODENAME
 DISTRO="${DISTRIBUTION:-${ID:-}}"
 CODENAME="${DISTRIBUTION_CODENAME:-${VERSION_CODENAME:-}}"
 DISTRO="${DISTRO,,}"
@@ -45,14 +48,14 @@ if [ -z "$DISTRO" ] || [ -z "$CODENAME" ]; then
   exit 1
 fi
 case "$DISTRO/$CODENAME" in
-  debian/trixie) ;; # tested: Armbian trixie on Orange Pi 5B
-  *)
-    echo "ERROR: unsupported release: $DISTRO/$CODENAME" >&2
-    echo "  If the docker/github apt repos publish a suite for it," >&2
-    echo "  add it to the allowlist above and retest; otherwise stop here." >&2
-    echo "  (Cat of /etc/os-release /etc/armbian-release needed to proceed.)" >&2
-    exit 1
-    ;;
+debian/trixie) ;; # tested: Armbian trixie on Orange Pi 5B
+*)
+  echo "ERROR: unsupported release: $DISTRO/$CODENAME" >&2
+  echo "  If the docker/github apt repos publish a suite for it," >&2
+  echo "  add it to the allowlist above and retest; otherwise stop here." >&2
+  echo "  (Cat of /etc/os-release /etc/armbian-release needed to proceed.)" >&2
+  exit 1
+  ;;
 esac
 
 # ---------- system packages (base) ----------
@@ -64,10 +67,7 @@ esac
 # verify_host_browser). Debian publishes arm64 builds and trixie's is 154.x,
 # which the MCP's --allowedUrlPattern requires (149+); Google ships no Linux
 # arm64 Chrome, so the distro package is the only pinned-free option here.
-# age: sops' companion for secret encryption, from the distro repo rather than
-# mise on purpose — a small stable CLI whose audited reference implementation
-# ships in Debian main (trixie: 1.2.1), so the distro carries the security
-# fixes. Version drift does not affect sops interoperability.
+# age: FluxCD recommendation for k8s secret encryption.
 sudo apt-get update
 $APT install -y ca-certificates curl fontconfig xz-utils git vim build-essential tmux chromium age
 
@@ -87,11 +87,11 @@ sudo install -m 0755 -d /etc/apt/keyrings
 # repo publishes current arm64 builds.
 if [ ! -f /etc/apt/sources.list.d/github-cli.list ]; then
   echo "==> Adding GitHub CLI apt repo..."
-  curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
-    | sudo tee /etc/apt/keyrings/githubcli-archive-keyring.gpg >/dev/null
+  curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg |
+    sudo tee /etc/apt/keyrings/githubcli-archive-keyring.gpg >/dev/null
   sudo chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg
-  echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
-    | sudo tee /etc/apt/sources.list.d/github-cli.list >/dev/null
+  echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" |
+    sudo tee /etc/apt/sources.list.d/github-cli.list >/dev/null
 fi
 
 # ---------- docker-ce: official Docker apt repo (deb822) ----------
