@@ -1,0 +1,37 @@
+# Repo-level mise config, copied into each new project by `cp -r template/. .`.
+#
+# Project config overrides the global config that setup-mise.sh writes to
+# ~/.config/mise/config.toml, so list only what this repo needs *beyond* the
+# global toolchain (node, python, go, uv, pnpm, kubectl, helm, k9s, terraform,
+# flux2, sops, flate, neovim, lazygit, ripgrep, fd, fzf, tree-sitter, herdr,
+# pi). Naming a global tool here pins this repo to a different version of it;
+# the global install stays in place and other repos keep their version.
+#
+# Adding a tool to a lockfile-backed project:
+#   1. add it under [tools]
+#   2. mise lock                 # resolves versions + records checksums
+#   3. commit mise.toml + mise.lock
+#   4. set locked = true under [settings]
+#
+# Why the 14-day policy is repeated here: it is the in-repo record of the
+# supply-chain policy, and it still applies on a machine (or CI image) that
+# never ran setup-mise.sh, where the global config's copy is absent.
+#
+# Why `locked` is NOT set here: locked mode needs `locked_scopes` to cover only
+# the scopes you actually lock, and `locked_scopes` is a global-only setting
+# that mise ignores in project config. A repo that sets `locked = true` expects
+# the global `locked_scopes = ["project"]` from setup-mise.sh; without it,
+# locked mode also demands lockfile entries for every global tool and refuses
+# to install ("go@1.27 is not in the lockfile"). Add `locked = true` only to a
+# project that has a committed mise.lock and a curated tool list.
+
+[settings]
+# Matches uv.toml `exclude-newer` and npm/pnpm `min-release-age` in the
+# dotfiles repo. Gates version resolution only: exact pins and mise.lock
+# entries are not filtered.
+minimum_release_age = "14d"
+
+[tools]
+# Add project-specific tools here, for example:
+# node = "20"
+# python = "3.12"
