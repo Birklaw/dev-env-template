@@ -1,51 +1,26 @@
 # dev-env-template
 
-Bootstrap a fresh Fedora VM or an Armbian/Debian-family host (tested:
-Orange Pi 5B, aarch64, Armbian Debian trixie) into a dev environment:
+Bootstrap a fresh Fedora VM or an Armbian/Debian-family host into a dev environment:
 Docker + DevPod on the host, per-project devcontainers built from
-`template/`, and a shared mise-managed toolchain (node, python, go, uv, pnpm,
-kubectl, helm, k9s, terraform, flux2, sops, flate) plus agent CLIs (herdr, pi)
-installed identically on the host and inside every container. `age` and
-`chromium` come from the distro package manager; see [Notes](#notes).
+`template/`, and a shared mise-managed toolchain plus agent CLIs
+installed identically on the host and inside every container.
 
 Editing is **terminal-first with LazyVim (Neovim)**: `neovim`, `lazygit`,
-`ripgrep`, `fd`, `fzf` and `tree-sitter` are mise-managed like everything
-else, and the LazyVim config ships via the dotfiles repo into every
-container. There is **no VS Code**: containers are started with
+`ripgrep`, `fd`, `fzf` and `tree-sitter` are mise-managed
+and the LazyVim config ships via the dotfiles repo into every
+container. Containers are started with
 `devpod up --ide none` and entered over `devpod ssh`.
 
 ## Prerequisites
 
 - Fedora VM (x86_64/aarch64), or an Armbian/Debian-family host (tested:
   Orange Pi 5B, aarch64, Armbian Debian trixie), with a non-root sudo user
-- GitHub access: the repo is public, so a plain clone works on any fresh
-  host; pushing from it needs `gh auth login` + `gh auth setup-git`, or an
-  SSH key (see below)
 
 ## 1. Get this repo onto the host
-
-```bash
-git clone https://github.com/Birklaw/dev-env-template.git
-cd dev-env-template
-```
 
 Any parent directory works (`~/projects`, `~/repos`, ...). Bootstrap clones
 the **dotfiles as a sibling of this checkout** — `<parent>/dotfiles` — so
 wherever you put `dev-env-template`, the dotfiles land next to it.
-
-Cloning is unauthenticated (public repo, HTTPS). To **push** from a fresh
-host, pick one after cloning:
-
-```bash
-# Option A: GitHub CLI (installed by bootstrap.sh in any case)
-gh auth login
-gh auth setup-git
-
-# Option B: SSH key
-ssh-keygen -t ed25519
-cat ~/.ssh/id_ed25519.pub   # add at github.com/settings/keys
-git remote set-url origin git@github.com:Birklaw/dev-env-template.git
-```
 
 ## 2. Bootstrap the host (once per machine)
 
@@ -86,9 +61,9 @@ bootstrap fails here instead, naming the cause.
 
 ### Host dotfiles (cloned alongside this checkout)
 
-DevPod applies the dotfiles inside every container, but herdr, pi, tmux and
-nvim run *on the host*, and `pi/mcp.json` is deliberately host-only. So the
-bootstrap clones `DOTFILES_URL` to `<parent-of-this-repo>/dotfiles` and runs
+DevPod applies the dotfiles inside every container with the exception of
+`pi/mcp.json`, which is deliberately host-only. The bootstrap clones
+`DOTFILES_URL` to `<parent-of-this-repo>/dotfiles` and runs
 its `install.sh` as your user — no sudo, same script, one URL shared with
 DevPod so host and container cannot drift apart.
 
@@ -131,13 +106,10 @@ Knobs (environment variables, all optional):
 Two asymmetries worth knowing. First, the host uses your **working tree**
 (symlinks), while containers get a fresh **clone of the pushed branch** — so
 commit and push before expecting a dotfiles change to show up in a container.
-Second, apps that rewrite their own config (herdr writes through the symlink)
+Second, apps that rewrite their own config (e.g. herdr writes through the symlink)
 edit the repo on the host but a throwaway clone in a container; re-check
 `git -C <parent>/dotfiles status` after changing such settings, and run
 `herdr server reload-config` if a herdr server is already running.
-
-**Then reboot** (a fresh login is often enough, but a reboot is the reliable
-way to get docker group membership picked up everywhere).
 
 ## 3. Start a new project
 
@@ -212,8 +184,8 @@ bypass `minimum_release_age` entirely.
 devpod up ~/my-project --ide none    # start container, don't launch an editor
 ```
 
-**Always pass `--ide none`.** DevPod's default IDE is VS Code, which is no
-longer installed; without the flag `devpod up` tries to launch it. `--ide
+**Always pass `--ide none`.** DevPod's default IDE is VS Code, which is not
+installed; without the flag `devpod up` tries to launch it. `--ide
 none` starts the container only, and you enter it over SSH.
 
 First run takes a few minutes (pulls the base image, installs the toolchain).
@@ -293,6 +265,7 @@ Consequences worth knowing before you debug the wrong layer:
   deliberately.
 - **No GUI.** The host is reached over ssh, so the browser is always headless;
   screenshots are the verification surface, not a window you watch.
+
 ## What happens on `devpod up`
 
 Understanding the sequence makes the moving parts easy to debug:
@@ -566,8 +539,7 @@ restart Docker (that is the direct-rule idempotency contract).
   Add or remove a package with one `install_pi_package` line in
   `template/install-pi-packages.sh`.
 
-  **Startup model default.** The same script sets the model Pi starts on: the
-  `PI_DEFAULT_*` variables near the bottom of `template/install-pi-packages.sh`.
+  **Startup model default.** The same script sets the model Pi starts on.
   They are merged into `~/.pi/agent/settings.json` (`defaultProvider`,
   `defaultModel`, and `modelThinkingLevels` for that model) alongside the
   package list, so the host bootstrap and every container create re-assert the
