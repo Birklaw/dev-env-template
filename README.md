@@ -565,6 +565,20 @@ restart Docker (that is the direct-rule idempotency contract).
   duplicated here.
   Add or remove a package with one `install_pi_package` line in
   `template/install-pi-packages.sh`.
+
+  **Startup model default.** The same script sets the model Pi starts on: the
+  `PI_DEFAULT_*` variables near the bottom of `template/install-pi-packages.sh`.
+  They are merged into `~/.pi/agent/settings.json` (`defaultProvider`,
+  `defaultModel`, and `modelThinkingLevels` for that model) alongside the
+  package list, so the host bootstrap and every container create re-assert the
+  same default. This script is the only writer of that file — `pi install`
+  records the package list in it — so the merge preserves the package list and
+  any per-model thinking level already saved, and re-runs are a no-op. The
+  default applies to new sessions only: resuming a session restores that
+  session's model, and changing the model with `/model` + `Ctrl+S` on one
+  machine takes effect until the next bootstrap re-asserts the declared value.
+  It is inert without credentials: Pi falls back to the first authenticated
+  model, so a container with no Venice login starts on whatever it has.
 - **LazyVim is the editor.** Neovim +
   `lazygit`/`ripgrep`/`fd`/`fzf`/`tree-sitter` come from the shared mise
   toolchain (identical on host and in containers). The LazyVim config lives in
