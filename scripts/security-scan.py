@@ -33,6 +33,7 @@ import json
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 import urllib.error
@@ -68,12 +69,13 @@ NPM_PINS = {
 PYPI_PINS = {"uv": "uv"}
 CRATE_PINS = {"ripgrep": "ripgrep", "fd": "fd-find", "tree-sitter": "tree-sitter"}
 # OSV has no ecosystem for these; they get a manual upstream check.
+# value is the upstream advisory/release page; these have no OSV ecosystem
 MANUAL_PINS = {
     "node": "https://nodejs.org/en/blog/vulnerability",
     "python": "https://www.python.org/news/security/",
     "go": "https://go.dev/security/vulndb",
     "neovim": "https://github.com/neovim/neovim/security/advisories",
-    "herdr": "upstream releases (no OSV ecosystem)",
+    "herdr": "https://github.com/herdrdev/herdr/releases",
 }
 
 
@@ -220,7 +222,7 @@ def go_binaries(mise_json: dict):
         gover = m.group(1) if m else None
         deps = []
         for line in out.splitlines():
-            parts = line.split("\t")
+            parts = line.strip().split("\t")
             if len(parts) >= 3 and parts[0] == "dep" and parts[2].startswith("v"):
                 deps.append((parts[1], parts[2]))
         bins[name] = (path, gover, deps)
@@ -274,7 +276,7 @@ def go_build_info(path: Path):
         return None
     deps = []
     for line in out.splitlines():
-        parts = line.split("\t")
+        parts = line.strip().split("\t")
         if len(parts) >= 3 and parts[0] == "dep" and parts[2].startswith("v"):
             deps.append((parts[1], parts[2]))
     return m.group(1), deps
@@ -288,8 +290,10 @@ def scan_mason(root: Path):
     """
     npm, pip, go = {}, {}, {}
     topdirs, covered = set(), set()
+    go_missing = shutil.which("go") is None
     if not root.is_dir():
-        return {"packages": 0, "npm": npm, "pip": pip, "go": go, "manual": []}
+        return {"packages": 0, "npm": npm, "pip": pip, "go": go,
+                "manual": [], "go_missing": go_missing}
     for dirpath, _dirnames, filenames in os.walk(root):
         rel = os.path.relpath(dirpath, root)
         top = rel.split(os.sep)[0] if rel != "." else ""
@@ -319,6 +323,7 @@ def scan_mason(root: Path):
         "pip": pip,
         "go": go,
         "manual": sorted(topdirs - covered),
+        "go_missing": go_missing,
     }
 
 
@@ -428,6 +433,8 @@ def main():
               f"versions, {len(mason['pip'])} pip, {len(mason['go'])} Go binary(ies)")
         if mason["manual"]:
             print(f"     no machine-readable manifest (manual): {', '.join(mason['manual'])}")
+        if mason["go_missing"]:
+            print("     go not on PATH: Go binaries under Mason were not inspected")
         print("     (versions are the package's own tree, mostly transitive; verify reachability)")
         clean = 0
         for label, result in zip(mason_labels, mason_results):
@@ -471,6 +478,7 @@ def main():
                 dep_queries.append({"package": {"name": module, "ecosystem": "Go"},
                                     "version": version})
                 dep_labels.append(f"{name}: {module}@{version}")
+        print(f"     {len(dep_queries)} module query(ies)")
         dep_results = osv_batch(dep_queries) if dep_queries else []
         for label, result in zip(dep_labels, dep_results):
             vulns = result.get("vulns", [])
