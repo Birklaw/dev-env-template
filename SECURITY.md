@@ -137,9 +137,11 @@ scripts/security-scan.py --warn-only  # report without failing
 
 The scan resolves the mise pins to the installed versions, queries OSV for
 npm, PyPI, crates.io and Go modules, and checks each Go tool's stdlib build
-version against the Go vuln DB. It prints manual upstream links for the pins
-OSV cannot cover (node, python, neovim, herdr, devcontainer features, skill
-packs, the base image). Dependabot alerts are enabled in the repository
+version against the Go vuln DB. It also reads the installed Mason packages
+(npm and pip manifests, plus each Go binary's build info). It prints manual
+upstream links for the pins OSV cannot cover (node, python, neovim, herdr,
+devcontainer features, skill packs, the base image, and Mason tools without a
+manifest). Dependabot alerts are enabled in the repository
 settings; `.github/dependabot.yml` opens version-update PRs for the
 devcontainer features and GitHub Actions. They are complements: Dependabot
 follows upstream tags, the scan follows advisories. When workflows exist, pin

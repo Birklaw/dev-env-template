@@ -11,13 +11,16 @@ What it checks against OSV (https://osv.dev):
   * Pi packages from template/install-pi-packages.sh
   * chrome-devtools-mcp from the dotfiles pi/mcp.json
   * the Go stdlib of each installed Go tool, against the Go vuln DB index
+  * the installed Mason tools (nvim/lua/mason-tools.lua): npm and pip
+    manifests, plus every Go-built binary's modules and stdlib build version
   * with --deep, every module recorded in each installed Go binary
 
 It prints a manual checklist for the pins OSV cannot cover (node/python/neovim
-runtimes, devcontainer features, skill packs, the base image).
+runtimes, devcontainer features, skill packs, the base image, and Mason tools
+that ship no machine-readable manifest).
 
 Usage:
-  scripts/security-scan.py [--deep] [--warn-only] [--dotfiles PATH]
+  scripts/security-scan.py [--deep] [--warn-only] [--dotfiles PATH] [--mason DIR]
 
 Exit status: 0 clean, 1 findings, 2 the scan could not run (network).
 Requires only python3 (stdlib) and the repo; mise/go are used when present.
@@ -27,6 +30,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import shlex
 import subprocess
@@ -38,6 +42,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 OSV_BATCH = "https://api.osv.dev/v1/querybatch"
 VULN_GO_INDEX = "https://vuln.go.dev/index/modules.json"
+MASON_DEFAULT = Path.home() / ".local/share/nvim/mason/packages"
 
 # name in setup-mise.sh -> (ecosystem, OSV package, version transform)
 GO_TOOLS = {
@@ -149,8 +154,8 @@ def resolve_mise(mise_json: dict, name: str) -> str | None:
 
 def osv_batch(queries):
     results = []
-    for i in range(0, len(queries), 500):
-        payload = json.dumps({"queries": queries[i:i + 500]}).encode()
+    for i in range(0, len(queries), 1000):
+        payload = json.dumps({"queries": queries[i:i + 1000]}).encode()
         req = urllib.request.Request(OSV_BATCH, data=payload,
                                      headers={"Content-Type": "application/json"})
         try:
@@ -222,6 +227,101 @@ def go_binaries(mise_json: dict):
     return bins
 
 
+def read_pkg_json(path: Path):
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+    name, version = data.get("name"), data.get("version")
+    return (str(name), str(version)) if name and version else None
+
+
+def read_metadata(path: Path):
+    name = version = None
+    try:
+        with path.open() as fh:
+            for line in fh:
+                if not line.strip():
+                    break
+                low = line.lower()
+                if low.startswith("name:"):
+                    name = line.split(":", 1)[1].strip()
+                elif low.startswith("version:"):
+                    version = line.split(":", 1)[1].strip()
+                if name and version:
+                    break
+    except OSError:
+        return None
+    return (name, version) if name and version else None
+
+
+def is_elf(path: Path) -> bool:
+    try:
+        with path.open("rb") as fh:
+            return fh.read(4) == b"\x7fELF"
+    except OSError:
+        return False
+
+
+def go_build_info(path: Path):
+    try:
+        out = subprocess.run(["go", "version", "-m", str(path)],
+                             capture_output=True, text=True, timeout=30).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    m = re.match(r"^.*: (go[0-9][^\s]*)", out)
+    if not m:
+        return None
+    deps = []
+    for line in out.splitlines():
+        parts = line.split("\t")
+        if len(parts) >= 3 and parts[0] == "dep" and parts[2].startswith("v"):
+            deps.append((parts[1], parts[2]))
+    return m.group(1), deps
+
+
+def scan_mason(root: Path):
+    """Inspect installed Mason packages: npm/pip manifests and Go binaries.
+
+    Returns the unique package versions to query, the Go binaries with their
+    build info, and the package dirs that expose no machine-readable version.
+    """
+    npm, pip, go = {}, {}, {}
+    topdirs, covered = set(), set()
+    if not root.is_dir():
+        return {"packages": 0, "npm": npm, "pip": pip, "go": go, "manual": []}
+    for dirpath, _dirnames, filenames in os.walk(root):
+        rel = os.path.relpath(dirpath, root)
+        top = rel.split(os.sep)[0] if rel != "." else ""
+        if top:
+            topdirs.add(top)
+        for fn in filenames:
+            p = Path(dirpath) / fn
+            sp = str(p)
+            if fn == "package.json" and f"{os.sep}node_modules{os.sep}" in sp:
+                pv = read_pkg_json(p)
+                if pv:
+                    npm[pv] = True
+                    covered.add(top)
+            elif fn == "METADATA" and dirpath.endswith(".dist-info"):
+                pv = read_metadata(p)
+                if pv:
+                    pip[pv] = True
+                    covered.add(top)
+            elif "node_modules" not in sp and os.access(p, os.X_OK) and is_elf(p):
+                info = go_build_info(p)
+                if info:
+                    go[sp] = info
+                    covered.add(top)
+    return {
+        "packages": len(topdirs),
+        "npm": npm,
+        "pip": pip,
+        "go": go,
+        "manual": sorted(topdirs - covered),
+    }
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--deep", action="store_true",
@@ -229,6 +329,8 @@ def main():
     ap.add_argument("--warn-only", action="store_true",
                     help="always exit 0; report findings without failing")
     ap.add_argument("--dotfiles", default=str(REPO.parent / "dotfiles"))
+    ap.add_argument("--mason", default=str(MASON_DEFAULT),
+                    help="Mason packages dir (default: ~/.local/share/nvim/mason/packages)")
     args = ap.parse_args()
 
     setup_mise = REPO / "template" / "setup-mise.sh"
@@ -293,10 +395,25 @@ def main():
     else:
         manual.append("chrome-devtools-mcp (dotfiles pi/mcp.json not found)")
 
-    results = osv_batch(queries) if queries else []
+    mason_dir = Path(args.mason).expanduser()
+    mason = scan_mason(mason_dir)
+    mason_queries, mason_labels = [], []
+    for name, version in sorted(mason["npm"]):
+        mason_queries.append({"package": {"name": name, "ecosystem": "npm"},
+                              "version": version})
+        mason_labels.append(f"npm {name}@{version}")
+    for name, version in sorted(mason["pip"]):
+        mason_queries.append({"package": {"name": name, "ecosystem": "PyPI"},
+                              "version": version})
+        mason_labels.append(f"PyPI {name}@{version}")
+
+    all_queries = queries + mason_queries
+    results = osv_batch(all_queries) if all_queries else []
+    direct_results = results[:len(queries)]
+    mason_results = results[len(queries):]
     hits = 0
     print("== direct pins")
-    for label, result in zip(labels, results):
+    for label, result in zip(labels, direct_results):
         vulns = result.get("vulns", [])
         if vulns:
             hits += 1
@@ -305,8 +422,28 @@ def main():
         else:
             print(f"OK   {label}")
 
+    if mason["packages"]:
+        print(f"\n== Mason tools ({mason_dir})")
+        print(f"     {mason['packages']} packages; {len(mason['npm'])} unique npm "
+              f"versions, {len(mason['pip'])} pip, {len(mason['go'])} Go binary(ies)")
+        if mason["manual"]:
+            print(f"     no machine-readable manifest (manual): {', '.join(mason['manual'])}")
+        print("     (versions are the package's own tree, mostly transitive; verify reachability)")
+        clean = 0
+        for label, result in zip(mason_labels, mason_results):
+            vulns = result.get("vulns", [])
+            if vulns:
+                hits += 1
+                print(f"HIT  {label} -> {', '.join(v['id'] for v in vulns)}")
+            else:
+                clean += 1
+        print(f"     clean: {clean}")
+
     print("\n== Go stdlib / build versions")
     bins = go_binaries(mise_json)
+    for path, (gover, deps) in mason["go"].items():
+        label = f"mason:{Path(path).parent.name or Path(path).name}"
+        bins[label] = (path, gover, deps)
     go_versions = sorted({b[1] for b in bins.values() if b[1]})
     if not bins:
         print("(no installed Go tools found; run `mise install` first)")
