@@ -368,7 +368,7 @@ TIMER
 
   # The guard is IPv4-only; a Docker network with IPv6 would bypass it.
   if sudo docker info >/dev/null 2>&1; then
-    if sudo docker network inspect $(sudo docker network ls -q) \
+    if sudo docker network ls -q | xargs -r sudo docker network inspect \
       --format '{{.Name}} {{.EnableIPv6}}' 2>/dev/null | grep -q ' true$'; then
       echo "    [warn]  a Docker network has IPv6 enabled; container egress guard is IPv4-only" >&2
     fi

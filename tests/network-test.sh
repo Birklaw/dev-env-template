@@ -206,6 +206,7 @@ run_url_validation() {
 echo '== dotfiles URL: local and relative values are rejected'
 # An empty value is NOT listed: common.sh substitutes its default URL, so it is
 # a valid input that falls through to the default rather than a bypass.
+# shellcheck disable=SC2088 # the literal ~/ value is what this test rejects
 for bad in '../../.ssh' '..' '.' './dotfiles' 'dotfiles' '/home/user/dotfiles' '~/dotfiles'; do
   if run_url_validation "$bad" >/dev/null 2>&1; then
     fail "accepted a local/relative DOTFILES_URL: '$bad'"
