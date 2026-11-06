@@ -24,6 +24,11 @@ command -v dnf &>/dev/null || {
 # Google ships no Linux arm64 Chrome — and tracks current versions, which the
 # MCP's --allowedUrlPattern needs (149+).
 sudo dnf install -y git curl gh vim-enhanced gcc make tmux chromium age
+# ca-certificates: security-sensitive. dnf install does not upgrade an
+# already-installed package, so ask for the newer trust store explicitly —
+# it is the mitigation for Go tools built below Go 1.26.10 (GO-2026-6809/
+# CVE-2026-111943, the compromised eMudhra intermediates). See SECURITY.md.
+sudo dnf upgrade -y ca-certificates
 
 # ---------- system libs for native Node.js / pnpm binaries ----------
 # Some ARM Fedora images (especially aarch64 on cloud/edge devices) strip

@@ -1,0 +1,33 @@
+name: security-scan
+
+# Twice a month, in step with the 14-day minimum release age. The job installs
+# the pinned toolchain so the scan can resolve floating pins to real versions
+# and read the Go binaries' build metadata. The scan reads the
+# security-scan-accepted block in SECURITY.md and fails only on a finding that
+# is not listed there. Mason is a host-side nvim install, not present on the
+# runner, so Mason coverage stays a local report. The full toolchain is
+# installed on purpose: setup-mise.sh is the single source of truth, and a
+# subset install would duplicate its tool list.
+on:
+  schedule:
+    - cron: "0 9 1,15 * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      # Pin actions by commit SHA; Dependabot (.github/dependabot.yml,
+      # github-actions) raises the bump PRs.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install the pinned toolchain
+        run: |
+          bash template/setup-mise.sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          echo "$HOME/.local/share/mise/shims" >> "$GITHUB_PATH"
+      - name: Scan pins and the installed toolchain
+        run: python3 scripts/security-scan.py

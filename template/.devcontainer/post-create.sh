@@ -46,6 +46,18 @@ fi
 
 $APT update
 
+# ---------- trust store ----------
+# ca-certificates is security-sensitive: `apt-get install` does not upgrade an
+# already-installed package, and the base image ships an older copy. This is
+# the mitigation for the Go tools built below Go 1.26.10 (GO-2026-6809 /
+# CVE-2026-111943, the compromised eMudhra intermediates) until upstream
+# rebuilds land. See SECURITY.md.
+if dpkg-query -W -f='${Status}' ca-certificates 2>/dev/null | grep -q 'install ok installed'; then
+  if ! $APT install "${APT_OPTS[@]}" --only-upgrade ca-certificates </dev/null; then
+    echo "WARNING: could not upgrade ca-certificates; the container trust store may be stale." >&2
+  fi
+fi
+
 # libatomic1: minimal devcontainer base images strip libatomic, causing
 # cryptic "libatomic.so.1: cannot open shared object file" errors on pnpm/npm.
 if ! ldconfig -p 2>/dev/null | grep -q libatomic.so.1; then

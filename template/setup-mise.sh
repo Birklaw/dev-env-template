@@ -10,9 +10,62 @@
 set -euo pipefail
 
 # ---------- mise itself ----------
+# Pin the release and verify the archive against a SHA-256 hardcoded here, so
+# the trust root is this repo rather than the download channel. Fall back to
+# the official installer (which verifies the archive against the release's own
+# checksum and honours MISE_VERSION below) only when the arch is unknown or the
+# download itself fails.
+# Bump: pick a release older than the 14-day window, then update MISE_VERSION
+# and the per-arch digests from that release's SHASUMS256.txt.
+MISE_VERSION="v2026.10.17"
+MISE_SHA256_X64="17565e268c5542d8ce944321e17af81e0b741b65af4aa7e8e010ee77376a4aa3"
+MISE_SHA256_ARM64="cac510e51793ad45e65fe92305bdbe4309c9c60b5907badbc7eba111738ab08f"
+MISE_SHA256_ARMV7="13bded64461a2ef09677b6eba40ba47adf62d347bd64d54449accaac8f91c409"
+
+install_mise_verified() {
+  local arch sha url tmp
+  case "$(uname -m)" in
+  x86_64)
+    arch="linux-x64"
+    sha="$MISE_SHA256_X64"
+    ;;
+  aarch64 | arm64)
+    arch="linux-arm64"
+    sha="$MISE_SHA256_ARM64"
+    ;;
+  armv7l | armhf)
+    arch="linux-armv7"
+    sha="$MISE_SHA256_ARMV7"
+    ;;
+  *) return 1 ;;
+  esac
+  url="https://github.com/jdx/mise/releases/download/${MISE_VERSION}/mise-${MISE_VERSION}-${arch}.tar.gz"
+  tmp="$(mktemp -d)"
+  if ! curl -fsSL -o "$tmp/mise.tar.gz" "$url"; then
+    rm -rf "$tmp"
+    return 1
+  fi
+  if ! echo "$sha  $tmp/mise.tar.gz" | sha256sum -c - >/dev/null; then
+    rm -rf "$tmp"
+    echo "ERROR: checksum mismatch for $url" >&2
+    exit 1
+  fi
+  if ! tar --no-same-owner -xzf "$tmp/mise.tar.gz" -C "$tmp"; then
+    rm -rf "$tmp"
+    return 1
+  fi
+  mkdir -p "$HOME/.local/bin"
+  install -m 0755 "$tmp/mise/bin/mise" "$HOME/.local/bin/mise"
+  rm -rf "$tmp"
+  return 0
+}
+
 if ! command -v mise &>/dev/null; then
-  echo "==> Installing mise..."
-  curl -fsSL https://mise.run | sh
+  echo "==> Installing mise $MISE_VERSION (sha256 verified)..."
+  if ! install_mise_verified; then
+    echo "==> Pinned install unavailable; falling back to mise.run with MISE_VERSION=$MISE_VERSION" >&2
+    curl -fsSL https://mise.run | MISE_VERSION="$MISE_VERSION" sh
+  fi
 fi
 export PATH="$HOME/.local/bin:$PATH"
 
@@ -23,7 +76,7 @@ MISE_BIN="$(command -v mise)"
 
 # Shell activation for interactive bash sessions (idempotent).
 if ! grep -q 'mise activate bash' ~/.bashrc 2>/dev/null; then
-  echo "eval \"\$($MISE_BIN activate bash)\"" >> ~/.bashrc
+  echo "eval \"\$($MISE_BIN activate bash)\"" >>~/.bashrc
 fi
 eval "$("$MISE_BIN" activate bash)"
 
@@ -43,6 +96,12 @@ eval "$("$MISE_BIN" activate bash)"
 # within its pins by design.
 mise settings set minimum_release_age "14d"
 mise settings set locked_scopes project
+# Keep mise self-update on: it updates only the mise binary and its plugins,
+# never the [tools] above, and self_update.minimum_release_age pins it to the
+# same 14-day gate. auto = true lets it run before network commands; the gate
+# still holds every release back for 14 days.
+mise settings set self_update.minimum_release_age "14d"
+mise settings set self_update.auto true
 
 # ---------- global toolset ----------
 # Shorthands resolve via the mise registry (core/aqua backends: precompiled,
@@ -62,7 +121,7 @@ mise use -g \
   node@24 \
   python@3.14 \
   go@1.27 \
-  uv@0.12 \
+  uv@0.13 \
   pnpm@12 \
   kubectl@1.37 \
   helm@4 \
@@ -75,6 +134,9 @@ mise use -g \
 # sops: secret encryption; 3.13 is the minor boundary (sops is pre-4.0).
 # flate: not in the mise registry — the GitHub backend verifies the release
 # checksum. Kept at the 0.x minor boundary like the other 0.x tools.
+# uv: 0.13.4 fixed GHSA-hq85-5cpj-mr62 (the eMudhra CA in uv's vendored
+# trust store); 0.13.5 is the gate-compliant release today. uv 0.13 defaults
+# to Python 3.15 when nothing is pinned; this toolchain pins 3.14 explicitly.
 
 # ---------- terminal IDE toolset (LazyVim) ----------
 # Neovim is the primary editor (LazyVim); runs on the VM and in every
@@ -105,7 +167,7 @@ mise settings set npm.package_manager npm
 
 # pnpm global bin dir for ad-hoc 'pnpm add -g <pkg>' installs (idempotent).
 if ! grep -q 'PNPM_HOME' ~/.bashrc 2>/dev/null; then
-  cat >> ~/.bashrc <<'EOF'
+  cat >>~/.bashrc <<'EOF'
 export PNPM_HOME="$HOME/.local/share/pnpm"
 export PATH="$PNPM_HOME:$PATH"
 EOF
@@ -118,9 +180,12 @@ export PATH="$PNPM_HOME:$PATH"
 # pi: npm package (@earendil-works/pi-coding-agent, binary: pi) — mise's npm
 # backend needs node, which the toolset above provides. Pi's docs state
 # install scripts aren't required, so mise's --ignore-scripts default is fine.
+# 1.5.0 is the first release with undici 8.12.3 and minimatch 11.0.3
+# (GHSA-2m5v-pch6-74hx and GHSA-g3hv-75wg-m249). Exact pins bypass
+# minimum_release_age, so this bump is a recorded security exception.
 mise use -g \
   herdr@0.9 \
-  "npm:@earendil-works/pi-coding-agent@1.1.0"
+  "npm:@earendil-works/pi-coding-agent@1.5.0"
 
 echo "==> mise toolset installed:"
 mise ls

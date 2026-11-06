@@ -1,2 +1,4 @@
 requirements.md
 tmp/
+__pycache__/
+*.pyc

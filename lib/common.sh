@@ -475,31 +475,128 @@ EOF
   exit 1
 }
 
-# ---------- devpod CLI (architecture-aware) ----------
-install_devpod() {
-  if ! command -v devpod &>/dev/null; then
-    echo "==> Installing devpod CLI..."
-    local ARCH URL
-    ARCH="$(uname -m)"
-    case "$ARCH" in
-      x86_64)
-        URL="https://github.com/loft-sh/devpod/releases/latest/download/devpod-linux-amd64"
-        ;;
-      aarch64|arm64)
-        URL="https://github.com/loft-sh/devpod/releases/latest/download/devpod-linux-arm64"
-        ;;
-      armv7l|armhf)
-        URL="https://github.com/loft-sh/devpod/releases/latest/download/devpod-linux-arm"
-        ;;
-      *)
-        echo "ERROR: Unsupported architecture: $ARCH" >&2
-        echo "Supported: x86_64, aarch64/arm64, armv7l/armhf" >&2
-        exit 1
-        ;;
-    esac
-    curl -fsSL -o /tmp/devpod "$URL"
-    sudo install -c -m 0755 /tmp/devpod /usr/local/bin && rm -f /tmp/devpod
+# ---------- devpod CLI (architecture-aware, pinned + verified) ----------
+# Pin the stable release and verify the installed CLI against a SHA-256
+# hardcoded here on every bootstrap, not just the first install. The trust root
+# is this repo, not the release channel: a replaced or tampered asset fails the
+# check and aborts the bootstrap. Upstream publishes no checksum file or
+# attestation for the CLI assets (only an AppImage signature), so the hashes
+# below were computed from the v0.6.15 release.
+#
+# An existing binary at /usr/local/bin/devpod is hashed against the pin and
+# replaced when it does not match. That closes hosts bootstrapped before this
+# pin existed: the old code fetched releases/latest, which was the same
+# version but never verified it. A devpod installed anywhere else is left
+# alone with a warning rather than clobbering a distro or manual install. The
+# pin deliberately wins over a newer or alpha build at that path: the host
+# converges on the stable release, not on whatever happens to be installed.
+#
+# Bump procedure: download the new per-arch assets, run sha256sum, update the
+# version and both digests. armv7 is not published upstream; fail closed
+# rather than fall back to an unverified URL.
+DEVPOD_VERSION="v0.6.15"
+DEVPOD_SHA256_AMD64="cc50bce09229d5a6d448ac1d4494327f4b8f7a20321e5fcee3bfec1aef0d20c5"
+DEVPOD_SHA256_ARM64="9226161e0c9f5a45d0f8d1778f940498e787b650f0e0fcf3c29f1f67e7a3f272"
+DEVPOD_INSTALL_PATH="/usr/local/bin/devpod"
+
+# devpod_pin_sha ARCH -> the pinned SHA for that machine architecture
+devpod_pin_sha() {
+  case "$1" in
+    x86_64) echo "$DEVPOD_SHA256_AMD64" ;;
+    aarch64 | arm64) echo "$DEVPOD_SHA256_ARM64" ;;
+    *) return 1 ;;
+  esac
+}
+
+# devpod_pin_url ARCH -> the pinned release asset URL for that architecture
+devpod_pin_url() {
+  case "$1" in
+    x86_64) echo "https://github.com/loft-sh/devpod/releases/download/${DEVPOD_VERSION}/devpod-linux-amd64" ;;
+    aarch64 | arm64) echo "https://github.com/loft-sh/devpod/releases/download/${DEVPOD_VERSION}/devpod-linux-arm64" ;;
+    *) return 1 ;;
+  esac
+}
+
+# devpod_status EXISTING SHA -> install | ok | replace | elsewhere
+# EXISTING is the path from `command -v devpod`, or empty. The pin is only
+# needed for the cases the bootstrap owns, so an existing install elsewhere
+# never forces an arch-to-pin lookup.
+devpod_status() {
+  local existing="$1" sha="$2"
+  if [ -z "$existing" ]; then
+    echo "install"
+    return 0
   fi
+  if [ "$(readlink -f "$existing")" != "$(readlink -f "$DEVPOD_INSTALL_PATH")" ]; then
+    echo "elsewhere"
+    return 0
+  fi
+  if [ "$(sha256sum "$existing" | awk '{print $1}')" = "$sha" ]; then
+    echo "ok"
+  else
+    echo "replace"
+  fi
+}
+
+# install_devpod_asset URL SHA -> download, verify and install the pinned asset
+install_devpod_asset() {
+  local url="$1" sha="$2" tmp got
+  tmp="$(mktemp)"
+  if ! curl -fsSL -o "$tmp" "$url"; then
+    rm -f "$tmp"
+    echo "ERROR: could not download $url" >&2
+    return 1
+  fi
+  if ! echo "${sha}  $tmp" | sha256sum -c - >/dev/null; then
+    rm -f "$tmp"
+    echo "ERROR: checksum mismatch for $url" >&2
+    return 1
+  fi
+  got="$("$tmp" version 2>/dev/null || true)"
+  if [ "$got" != "$DEVPOD_VERSION" ]; then
+    rm -f "$tmp"
+    echo "ERROR: devpod binary reports '${got:-no version}', expected $DEVPOD_VERSION" >&2
+    return 1
+  fi
+  if ! sudo install -c -m 0755 "$tmp" "$DEVPOD_INSTALL_PATH"; then
+    rm -f "$tmp"
+    echo "ERROR: could not install devpod to $DEVPOD_INSTALL_PATH" >&2
+    return 1
+  fi
+  rm -f "$tmp"
+}
+
+install_devpod() {
+  local arch sha url existing status
+  existing="$(command -v devpod 2>/dev/null || true)"
+  if [ -n "$existing" ] && \
+    [ "$(readlink -f "$existing")" != "$(readlink -f "$DEVPOD_INSTALL_PATH")" ]; then
+    echo "    [warn] devpod at $existing is not the bootstrap's $DEVPOD_INSTALL_PATH; leaving it alone" >&2
+    return 0
+  fi
+  arch="$(uname -m)"
+  sha="$(devpod_pin_sha "$arch")" || {
+    echo "ERROR: DevPod publishes no CLI asset for $arch; use x86_64 or aarch64/arm64." >&2
+    exit 1
+  }
+  url="$(devpod_pin_url "$arch")"
+  status="$(devpod_status "$existing" "$sha")"
+  case "$status" in
+    ok)
+      echo "    [ok]   devpod $DEVPOD_VERSION (sha256 verified)"
+      return 0
+      ;;
+    replace)
+      echo "==> devpod at $existing does not match the pinned $DEVPOD_VERSION; replacing..."
+      ;;
+    *)
+      echo "==> Installing devpod CLI..."
+      ;;
+  esac
+  if ! install_devpod_asset "$url" "$sha"; then
+    exit 1
+  fi
+  echo "    [ok]   devpod $DEVPOD_VERSION (sha256 verified)"
 }
 
 # ---------- devpod defaults for all workspaces ----------
@@ -528,11 +625,30 @@ install_nerd_font() {
   echo "==> Installing Nerd Font symbols $NF_VERSION (pinned, hash-verified)..."
   local NF_TMP
   NF_TMP="$(mktemp -d)"
-  curl -fsSL -o "$NF_TMP/nf-symbols.tar.xz" \
-    "https://github.com/ryanoasis/nerd-fonts/releases/download/${NF_VERSION}/NerdFontsSymbolsOnly.tar.xz"
-  echo "${NF_SHA256}  $NF_TMP/nf-symbols.tar.xz" | sha256sum -c -
+  if ! curl -fsSL -o "$NF_TMP/nf-symbols.tar.xz" \
+    "https://github.com/ryanoasis/nerd-fonts/releases/download/${NF_VERSION}/NerdFontsSymbolsOnly.tar.xz"; then
+    rm -rf "$NF_TMP"
+    echo "ERROR: could not download the Nerd Font archive" >&2
+    return 1
+  fi
+  if ! echo "${NF_SHA256}  $NF_TMP/nf-symbols.tar.xz" | sha256sum -c - >/dev/null; then
+    rm -rf "$NF_TMP"
+    echo "ERROR: Nerd Font checksum mismatch" >&2
+    return 1
+  fi
+  mkdir -p "$NF_TMP/extract"
+  if ! tar -xJf "$NF_TMP/nf-symbols.tar.xz" -C "$NF_TMP/extract"; then
+    rm -rf "$NF_TMP"
+    echo "ERROR: could not extract the Nerd Font archive" >&2
+    return 1
+  fi
+  if [ ! -f "$NF_TMP/extract/SymbolsNerdFontMono-Regular.ttf" ]; then
+    rm -rf "$NF_TMP"
+    echo "ERROR: Nerd Font archive did not contain the expected font" >&2
+    return 1
+  fi
   mkdir -p "$NF_DIR" "$HOME/.config/fontconfig/conf.d"
-  tar -xJf "$NF_TMP/nf-symbols.tar.xz" -C "$NF_DIR"
+  cp -a "$NF_TMP/extract/." "$NF_DIR/"
   ln -sf "$NF_DIR/10-nerd-font-symbols.conf" "$HOME/.config/fontconfig/conf.d/"
   fc-cache -f "$NF_DIR"
   rm -rf "$NF_TMP"

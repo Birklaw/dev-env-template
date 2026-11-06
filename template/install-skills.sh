@@ -13,7 +13,9 @@
 # ADDING A PACK: add an install_pack call at the bottom of this file. Options:
 #
 #   --repo <url>        git URL (required)
-#   --ref <ref>         tag/branch/commit the pack is held at (required)
+#   --ref <sha>         full 40-char commit SHA the pack is held at (required);
+#                       tags are movable, so record the release tag in a
+#                       comment beside the call instead
 #   --subdir <dir>      directory inside the repo that holds the skills
 #                       (default: skills)
 #   --include <a,b,..>  install only these skill names (optional; default: all)
@@ -45,20 +47,65 @@ csv_contains() {
   return 1
 }
 
-# Clone a pack at its ref, or re-pin an existing checkout when the ref moved.
+# Clone a pack at its commit, or re-pin an existing checkout when the commit
+# differs. Commits are fetched explicitly: `git clone --branch` accepts a
+# branch or tag, not a raw SHA.
 ensure_checkout() {
-  local name="$1" repo="$2" ref="$3" dir
+  local name="$1" repo="$2" ref="$3" dir current="" tmp backup=""
   dir="$(checkout_dir "$name")"
-  if [ ! -d "$dir/.git" ]; then
-    log "Cloning skill pack '$name' at $ref..."
-    mkdir -p "$CHECKOUT_ROOT"
-    git clone --depth 1 --branch "$ref" "$repo" "$dir"
-  elif [ "$(git -C "$dir" describe --tags --exact-match 2>/dev/null || true)" != "$ref" ]; then
-    log "Re-pinning skill pack '$name' to $ref..."
-    rm -rf "$dir"
-    git clone --depth 1 --branch "$ref" "$repo" "$dir"
-  else
+  if ! printf '%s' "$ref" | grep -Eq '^[0-9a-f]{40}$'; then
+    echo "ERROR: ensure_checkout $name: ref must be a full 40-character commit SHA (got '$ref')" >&2
+    exit 1
+  fi
+  if [ -d "$dir/.git" ]; then
+    current="$(git -C "$dir" rev-parse HEAD 2>/dev/null || true)"
+  fi
+  if [ "$current" = "$ref" ]; then
     log "Skill pack '$name' already at $ref."
+    return 0
+  fi
+  log "Cloning skill pack '$name' at $ref..."
+  # Fetch into a temp dir and swap only after a successful checkout, so a
+  # failed re-pin leaves the previous checkout in place instead of an empty
+  # directory that fails the whole bootstrap.
+  mkdir -p "$CHECKOUT_ROOT"
+  # Sweep temp checkouts left by an interrupted run.
+  # Only temp dirs from an interrupted run: leave a concurrent run's fresh one alone.
+  find "$CHECKOUT_ROOT" -maxdepth 1 -name '.checkout.*' -mmin +60 -exec rm -rf {} + 2>/dev/null || true
+  tmp="$(mktemp -d "$CHECKOUT_ROOT/.checkout.XXXXXX")"
+  if ! git -C "$tmp" init -q; then
+    rm -rf "$tmp"
+    echo "ERROR: could not initialise a checkout for $repo" >&2
+    exit 1
+  fi
+  git -C "$tmp" remote add origin "$repo"
+  if ! git -C "$tmp" fetch --depth 1 origin "$ref"; then
+    rm -rf "$tmp"
+    echo "ERROR: could not fetch $repo at $ref (previous checkout left in place)" >&2
+    exit 1
+  fi
+  if ! git -C "$tmp" checkout -q --detach FETCH_HEAD; then
+    rm -rf "$tmp"
+    echo "ERROR: could not check out $ref in $repo" >&2
+    exit 1
+  fi
+  if [ -e "$dir" ]; then
+    backup="${dir}.old"
+    rm -rf "$backup"
+    if ! mv "$dir" "$backup"; then
+      rm -rf "$tmp"
+      echo "ERROR: could not move the previous checkout aside" >&2
+      exit 1
+    fi
+  fi
+  if ! mv "$tmp" "$dir"; then
+    if [ -n "$backup" ]; then mv "$backup" "$dir"; fi
+    rm -rf "$tmp"
+    echo "ERROR: could not move the new checkout into $dir" >&2
+    exit 1
+  fi
+  if [ -n "$backup" ]; then
+    rm -rf "$backup"
   fi
 }
 
@@ -78,6 +125,10 @@ install_pack() {
   done
   if [ -z "$repo" ] || [ -z "$ref" ]; then
     echo "ERROR: install_pack $name requires --repo and --ref" >&2
+    exit 1
+  fi
+  if ! printf '%s' "$ref" | grep -Eq '^[0-9a-f]{40}$'; then
+    echo "ERROR: install_pack $name: --ref must be a full 40-character commit SHA (got '$ref')" >&2
     exit 1
   fi
 
@@ -121,20 +172,30 @@ install_pack() {
   log "Skill pack '$name': $linked skills linked (ref $ref)."
 }
 
-mkdir -p "$SKILLS_DEST"
+main() {
+  mkdir -p "$SKILLS_DEST"
 
-# --- packs -----------------------------------------------------------------
-# Add new packs here. See the header for the option reference.
+  # --- packs -----------------------------------------------------------------
+  # Add new packs here. See the header for the option reference.
 
-install_pack osmani \
-  --repo https://github.com/addyosmani/agent-skills.git \
-  --ref 0.6.12 \
-  --omit using-agent-skills \
-  --shared references
+  # addyosmani/agent-skills 0.6.12
+  install_pack osmani \
+    --repo https://github.com/addyosmani/agent-skills.git \
+    --ref a06bc63b3f8b829c14b0bbf53d99fefc39d58092 \
+    --omit using-agent-skills \
+    --shared references
 
-install_pack pocock \
-  --repo https://github.com/mattpocock/skills.git \
-  --ref v1.3.1 \
-  --include grill-me,grill-with-docs,wayfinder,prototype,research,improve-codebase-architecture,writing-for-agents,pr,codebase-design,domain-modeling,grilling,setup-matt-pocock-skills
+  # mattpocock/skills v1.3.1
+  install_pack pocock \
+    --repo https://github.com/mattpocock/skills.git \
+    --ref 24fe0ef7737efae15c87225755e9f6f5965e4888 \
+    --include grill-me,grill-with-docs,wayfinder,prototype,research,improve-codebase-architecture,writing-for-agents,pr,codebase-design,domain-modeling,grilling,setup-matt-pocock-skills
 
-log "Skill packs installed in $SKILLS_DEST."
+  log "Skill packs installed in $SKILLS_DEST."
+}
+
+# The functions above are sourceable for tests; install the packs only when
+# the script is executed directly.
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+  main "$@"
+fi

@@ -28,15 +28,29 @@
   // self-contained, swap in "ghcr.io/devcontainers/features/docker-in-docker:2"
   // and add "--privileged" to runArgs.
   "features": {
-    "ghcr.io/devcontainers/features/docker-outside-of-docker:1": {
-      "version": "latest"
+    // Feature refs and tool versions are pinned. A `:1` ref resolves to the
+    // latest 1.x at build time and "version": "latest" pulls whatever the
+    // feature considers current, both outside the repo's 14-day policy.
+    // Bump deliberately:
+    //   docker-outside-of-docker: moby-cli from
+    //   https://packages.microsoft.com/repos/microsoft-ubuntu-noble-prod/
+    //   (verified against the host Docker CLI); buildx from the same repo.
+    //   compose is the one intentional float: the feature's
+    //   dockerDashComposeVersion option only accepts none/latest/v1/v2, so "v2"
+    //   is the narrowest value it offers.
+    //   github-cli: the official gh release from GitHub (host is 2.97.0).
+    "ghcr.io/devcontainers/features/docker-outside-of-docker:1.10.1": {
+      "version": "29.9.2",
+      "moby": true,
+      "mobyBuildxVersion": "0.38.1",
+      "dockerDashComposeVersion": "v2"
     },
     // gh: the base image does not ship the GitHub CLI (`gh auth login` in
     // the README would fail without it). The feature installs the official
     // release for the container's arch (amd64/arm64), independent of the
     // stale gh in Ubuntu's archive.
-    "ghcr.io/devcontainers/features/github-cli:1": {
-      "version": "latest"
+    "ghcr.io/devcontainers/features/github-cli:1.1.3": {
+      "version": "2.97.0"
     }
   },
   "postCreateCommand": "bash .devcontainer/post-create.sh",
