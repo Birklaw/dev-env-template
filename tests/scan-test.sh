@@ -72,8 +72,45 @@ assert not scan.missing_gated_input({"direct|svc@1|X"}, set())
 mixed = {"stdlib|go1.26.1|GO-1", "module|k9s: m@v1|GO-2", "direct|svc@1|GHSA-1"}
 assert scan.baseline_keys(mixed) == ["direct|svc@1|GHSA-1", "stdlib|go1.26.1|GO-1"], scan.baseline_keys(mixed)
 
+# run(): a missing binary is a 127 result, not a traceback.
+res = scan.run(["security-scan-no-such-binary"])
+assert res.returncode == 127 and res.stdout == "", (res.returncode, res.stdout)
+
+# missing_tools: pure over the lookup.
+assert scan.missing_tools(lambda _t: None) == ["mise", "go"]
+assert scan.missing_tools(lambda t: "/usr/bin/" + t) == []
+assert scan.missing_tools(lambda t: None if t == "go" else "/x") == ["go"]
+
+# pi_packages: scoped npm names and git SHAs must not be skipped.
+pins_file = sandbox / "install-pi-packages.sh"
+pins_file.write_text(
+    'install_pi_package "npm:pi-venice@0.2.0"\n'
+    'install_pi_package "npm:@scope/pkg@1.0.0"\n'
+    'install_pi_package "git:github.com/org/repo@0123456789abcdef0123456789abcdef01234567"\n'
+)
+assert scan.pi_packages(pins_file) == [
+    ("npm", "pi-venice", "0.2.0"),
+    ("npm", "@scope/pkg", "1.0.0"),
+    ("git", "github.com/org/repo", "0123456789abcdef0123456789abcdef01234567"),
+], scan.pi_packages(pins_file)
+
 # load_stdlib_index: a dead host and an empty index are both exit 2.
 original = scan.urllib.request.urlopen
+
+
+# osv_batch: a malformed response is exit 2, not a traceback.
+scan.urllib.request.urlopen = lambda *_a, **_k: type(
+    "R", (), {"__enter__": lambda s: s, "__exit__": lambda *a: None,
+              "read": lambda s: b"{"}
+)()
+try:
+    scan.osv_batch([{"package": {"name": "x", "ecosystem": "npm"}, "version": "1"}])
+except SystemExit as exc:
+    assert exc.code == 2, exc.code
+else:
+    raise AssertionError("osv_batch did not exit 2 on malformed JSON")
+finally:
+    scan.urllib.request.urlopen = original
 
 
 def dead(*_args, **_kwargs):

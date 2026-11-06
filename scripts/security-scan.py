@@ -22,8 +22,11 @@ that ship no machine-readable manifest).
 Usage:
   scripts/security-scan.py [--deep] [--warn-only] [--dotfiles PATH] [--mason DIR]
 
-Exit status: 0 clean, 1 findings, 2 the scan could not run (network).
-Requires only python3 (stdlib) and the repo; mise/go are used when present.
+Exit status: 0 clean, 1 findings, 2 the scan could not run (missing tools,
+network, or an unusable feed).
+Requires python3 (stdlib), mise, and go: mise resolves the installed toolchain
+and go reads the binaries' build metadata. A missing tool is exit 2, not a
+finding.
 """
 
 from __future__ import annotations
@@ -80,7 +83,17 @@ MANUAL_PINS = {
 
 
 def run(cmd, **kw):
-    return subprocess.run(cmd, capture_output=True, text=True, **kw)
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True, **kw)
+    except FileNotFoundError:
+        # The preflight in main() covers the normal case; this keeps a PATH
+        # race from becoming a traceback (exit 1, i.e. "findings").
+        return subprocess.CompletedProcess(cmd, 127, "", f"{cmd[0]}: not found")
+
+
+def missing_tools(which=shutil.which):
+    """Required executables not on PATH; the scan cannot gate without them."""
+    return [tool for tool in ("mise", "go") if which(tool) is None]
 
 
 def logical_lines(path: Path):
@@ -131,7 +144,7 @@ def pi_packages(path: Path):
     pins = []
     if not path.exists():
         return pins
-    for m in re.finditer(r'install_pi_package\s+"(npm|git):([^"@]+)@([^"]+)"', path.read_text()):
+    for m in re.finditer(r'install_pi_package\s+"(npm|git):(.+)@([^"]+)"', path.read_text()):
         pins.append((m.group(1), m.group(2), m.group(3)))
     return pins
 
@@ -163,7 +176,7 @@ def osv_batch(queries):
         try:
             with urllib.request.urlopen(req, timeout=60) as resp:
                 body = json.load(resp)
-        except (urllib.error.URLError, TimeoutError) as exc:
+        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
             print(f"ERROR: OSV query failed: {exc}", file=sys.stderr)
             sys.exit(2)
         results.extend(body.get("results", []))
@@ -411,6 +424,12 @@ def main():
     setup_mise = REPO / "template" / "setup-mise.sh"
     if not setup_mise.exists():
         print(f"ERROR: {setup_mise} not found", file=sys.stderr)
+        return 2
+
+    missing = missing_tools()
+    if missing:
+        print(f"ERROR: missing required tool(s): {', '.join(missing)}; "
+              "the gate needs mise and go on PATH", file=sys.stderr)
         return 2
 
     accepted = set()
