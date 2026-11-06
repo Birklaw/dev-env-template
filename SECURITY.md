@@ -54,21 +54,24 @@ Notes:
 
 Added on 2026-11-05/06:
 
-- **DevPod CLI**: pinned to `v0.6.15`; the amd64/arm64 assets are verified
-  against SHA-256s hardcoded in `lib/common.sh` (upstream publishes no CLI
-  checksum file or attestation). armv7 fails closed, as no asset is published.
+- **DevPod CLI**: pinned to `v0.6.15`. Every bootstrap hashes the installed
+  `/usr/local/bin/devpod` against the per-arch SHA-256 hardcoded in
+  `lib/common.sh` and replaces it on mismatch, so hosts bootstrapped before the
+  pin are verified too; a devpod installed elsewhere is left alone with a
+  warning. Upstream publishes no CLI checksum file or attestation. armv7 fails
+  closed, as no asset is published.
 - **mise**: bootstrapped from a pinned release; the `.tar.gz` archive is
   verified against a SHA-256 hardcoded in `template/setup-mise.sh`, with the
   official installer as the fallback for an unknown arch or a failed download.
-  `mise self-update` inherits the 14-day gate via
-  `self_update.minimum_release_age`, and `self_update.auto = true` enables the
-  automatic check before network commands without letting a release newer than
-  14 days through.
+  The archive hash covers first install; after that the self-updated binary
+  tracks the release channel, held to releases older than 14 days via
+  `self_update.minimum_release_age` (`self_update.auto = true`). The fallback
+  verifies against the release's own `SHASUMS256.txt` (same origin as the
+  archive), so it detects transport corruption, not a swapped release.
 - **Dependabot / GitHub Actions**: `.github/dependabot.yml` covers the
-  devcontainer definition and is ready for `github-actions`. When the first
-  workflow lands, pin each action to a full commit SHA rather than a movable
-  tag; Dependabot's `github-actions` ecosystem updates the SHA and the version
-  comment.
+  devcontainer definition and GitHub Actions. The workflow action
+  (`actions/checkout`) is pinned by commit SHA with a version comment, and the
+  Dependabot `github-actions` ecosystem updates it.
 - **Devcontainer features**: refs pinned to exact tags and tool versions
   (`docker-outside-of-docker:1.10.1` -> moby 29.9.2, buildx 0.38.1, compose
   v2; `github-cli:1.1.3` -> gh 2.97.0). The base image stays `ubuntu-24.04`.
@@ -96,16 +99,29 @@ security pass.
   with module-level OSV hits. Reachability is not established. Flux 2.10.0,
   kubectl 1.37.2, and Terraform 1.16.7 cut the exposure substantially; the
   remaining hits are upstream build choices, not local pins.
-- **Exact pins do not move.** Pi, `pi-venice`, `sops`, and `flate` are exact;
-  Mason's `name@version` entries are exact by necessity. They will not pick up
-  a patch automatically. Review them monthly; the Pi review date is above.
-- **Host config drift.** `sops` is exact `3.13.3` on the host while the script
-  says `3.13`; `flate` is installed but absent from
-  `~/.config/mise/config.toml`. Reconcile on the next bootstrap. Neither is a
-  current CVE blocker.
+- **Mason-installed tools.** The scan reads the installed Mason packages and
+  reports advisories in their dependency trees and Go build versions. As of
+  2026-11-06: `undici 6.26.0` in a Mason tree carries
+  GHSA-2m5v-pch6-74hx, the same TLS-validation-bypass advisory that motivated
+  the Pi 1.5.0 bump; plus transitive npm hits (`brace-expansion`, `fast-uri`,
+  `glob`, `ip-address`, `katex`, `markdown-it`, `minimatch`,
+  `postcss-selector-parser`, `smol-toml`, `tar`, `toml`, `zod`) and Go stdlib
+  build versions below the fix threshold in `helm-ls`, `terraform-ls`,
+  `tflint`, `shfmt`, and `golangci-lint`. Reachability is not established; the
+  fix path is `:MasonUpdate` or a reinstall of the affected tool. Review at the
+  next monthly pass. `ruff`, `stylua`, `taplo`, `hadolint`, `shellcheck`,
+  `lua-language-server`, `marksman`, and `js-debug-adapter` ship no
+  machine-readable manifest and stay manual.
+- **Exact pins do not move.** `pi` and `pi-venice` are exact, and Pi is the hot
+  target; review monthly (Pi review date above). `sops` and `flate` float at
+  their minor boundary again, so the 14-day gate covers their patches.
+- **Host config.** Reconciled on 2026-11-06: `sops = "3.13"`,
+  `github:home-operations/flate = "0.6"`, and the self-update settings are in
+  `~/.config/mise/config.toml`. Keep it matching `template/setup-mise.sh`.
 - **Open item.** The devcontainer base image is still a tag (`ubuntu-24.04`);
   a digest pin is not in place. The features and their tool versions are
-  pinned, and the mise installer is now pinned and verified.
+  pinned, the mise installer is pinned and verified, and the workflow runs the
+  scan on the declared pins.
 
 ## Verification
 
@@ -141,11 +157,16 @@ version against the Go vuln DB. It also reads the installed Mason packages
 (npm and pip manifests, plus each Go binary's build info). It prints manual
 upstream links for the pins OSV cannot cover (node, python, neovim, herdr,
 devcontainer features, skill packs, the base image, and Mason tools without a
-manifest). Dependabot alerts are enabled in the repository
-settings; `.github/dependabot.yml` opens version-update PRs for the
-devcontainer features and GitHub Actions. They are complements: Dependabot
-follows upstream tags, the scan follows advisories. When workflows exist, pin
-each action to a full commit SHA; Dependabot keeps those SHA pins current.
+manifest).
+
+`.github/workflows/security-scan.yml` runs the scan on the 1st and 15th and
+fails on a finding; it installs the pinned toolchain so floating pins resolve
+to real versions. Mason coverage is not available there (Mason is a host-side
+nvim install), so the local run stays the complete one.
+`.github/dependabot.yml` opens version-update PRs for the devcontainer
+definition and GitHub Actions; the workflow's `actions/checkout` is pinned by
+commit SHA and Dependabot keeps it current. Dependabot follows upstream tags,
+the scan follows advisories.
 
 ## Adding an exception
 
