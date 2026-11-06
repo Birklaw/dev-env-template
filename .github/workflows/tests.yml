@@ -1,0 +1,24 @@
+name: tests
+
+# The scan runs twice a month, so it cannot gate a push. This job enforces the
+# branch's tests on every push and pull request: the SHA-only ref guard, the
+# atomic skill checkout, and the scan's fail-closed stdlib gate.
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      # Pin actions by commit SHA; Dependabot (.github/dependabot.yml,
+      # github-actions) raises the bump PRs.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Stub-driven tests
+        run: ./tests/run.sh
+      - name: Scan syntax
+        run: python3 -m py_compile scripts/security-scan.py

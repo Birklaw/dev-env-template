@@ -218,7 +218,9 @@ version against the Go vuln DB. It also reads the installed Mason packages
 (npm and pip manifests, plus each Go binary's build info). It prints manual
 upstream links for the pins OSV cannot cover (node, python, neovim, herdr,
 devcontainer features, skill packs, the base image, and Mason tools without a
-manifest).
+manifest). A failed Go vuln index fetch or a missing `stdlib` entry fails the
+run (exit 2) rather than reporting green; advisories the index cannot place on
+the build's branch are printed as `UNEVALUATED` and are report-only.
 
 `.github/workflows/security-scan.yml` runs the scan on the 1st and 15th; it
 fails only on a finding that is not in the baseline below, so the accepted
@@ -226,10 +228,13 @@ upstream build versions keep the job green while a genuinely new hit fails it.
 It installs the pinned toolchain so floating pins resolve to real versions.
 Mason coverage is not available there (Mason is a host-side nvim install) and
 is report-only locally too, so the local run stays the complete one.
-`.github/dependabot.yml` opens version-update PRs for the devcontainer
-definition and GitHub Actions; the workflow's `actions/checkout` is pinned by
-commit SHA and Dependabot keeps it current. Dependabot follows upstream tags,
-the scan follows advisories.
+`.github/workflows/tests.yml` runs `tests/run.sh` on every push and pull
+request, so the SHA-ref guard, the atomic skill checkout, and the scan's
+fail-closed stdlib behaviour are enforced before merge. The scan itself only
+runs on its schedule. `.github/dependabot.yml` opens version-update PRs for the
+devcontainer definition and GitHub Actions; both workflows pin
+`actions/checkout` by commit SHA and Dependabot keeps it current. Dependabot
+follows upstream tags, the scan follows advisories.
 
 ## Adding an exception
 
