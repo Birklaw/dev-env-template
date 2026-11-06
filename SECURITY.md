@@ -31,7 +31,7 @@ window.
 
 | Date | Component | Exception | Reason | Gate opens | Status |
 | --- | --- | --- | --- | --- | --- |
-| 2026-11-05 | uv `0.12` -> `0.13.5` | none; minor pin bump | GHSA-hq85-5cpj-mr62 / PYSEC-2026-4321: the vendored CA store trusted a compromised eMudhra/emSign root. Fixed in 0.13.4. | already eligible | host installed; repo pin follow-up below |
+| 2026-11-05 | uv `0.12` -> `0.13.5` | none; minor pin bump | GHSA-hq85-5cpj-mr62 / PYSEC-2026-4321: the vendored CA store trusted a compromised eMudhra/emSign root. Fixed in 0.13.4. | already eligible | installed; pin committed in `setup-mise.sh` |
 | 2026-11-05 | Python `3.14.9` -> `3.14.10` | `mise upgrade --minimum-release-age 0s python` | CVE-2026-115557 (compromised-cert denylist; NVD 9.4) and CVE-2026-114583 (`tarfile.tar_filter` traversal; NVD 6.9). | 2026-11-08 | installed; exception ages out |
 | 2026-11-05 | Terraform `1.16.6` -> `1.16.7` | none; eligible | Built with Go 1.26.10, which includes GO-2026-6809 / CVE-2026-111943 (eMudhra CA denylist). | already eligible | installed |
 | 2026-11-05 | kubectl `1.37.1` -> `1.37.2` | `mise upgrade --minimum-release-age 0s kubectl` | Rebuilt with Go 1.26.10 for GO-2026-6809; the gate would have delayed it. | 2026-11-11 | installed via one-shot |
@@ -218,7 +218,8 @@ version against the Go vuln DB. It also reads the installed Mason packages
 (npm and pip manifests, plus each Go binary's build info). It prints manual
 upstream links for the pins OSV cannot cover (node, python, neovim, herdr,
 devcontainer features, skill packs, the base image, and Mason tools without a
-manifest). A failed Go vuln index fetch or a missing `stdlib` entry fails the
+manifest). It requires `mise` and `go` on PATH; a missing one is exit 2, not a
+finding. A failed Go vuln index fetch or a missing `stdlib` entry fails the
 run (exit 2) rather than reporting green; advisories the index cannot place on
 the build's branch are printed as `UNEVALUATED` and are report-only.
 
