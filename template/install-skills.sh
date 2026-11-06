@@ -51,7 +51,7 @@ csv_contains() {
 # differs. Commits are fetched explicitly: `git clone --branch` accepts a
 # branch or tag, not a raw SHA.
 ensure_checkout() {
-  local name="$1" repo="$2" ref="$3" dir current=""
+  local name="$1" repo="$2" ref="$3" dir current="" tmp backup=""
   dir="$(checkout_dir "$name")"
   if [ -d "$dir/.git" ]; then
     current="$(git -C "$dir" rev-parse HEAD 2>/dev/null || true)"
@@ -61,15 +61,44 @@ ensure_checkout() {
     return 0
   fi
   log "Cloning skill pack '$name' at $ref..."
-  rm -rf "$dir"
-  mkdir -p "$dir"
-  git -C "$dir" init -q
-  git -C "$dir" remote add origin "$repo"
-  if ! git -C "$dir" fetch --depth 1 origin "$ref"; then
-    echo "ERROR: could not fetch $repo at $ref" >&2
+  # Fetch into a temp dir and swap only after a successful checkout, so a
+  # failed re-pin leaves the previous checkout in place instead of an empty
+  # directory that fails the whole bootstrap.
+  mkdir -p "$CHECKOUT_ROOT"
+  tmp="$(mktemp -d "$CHECKOUT_ROOT/.checkout.XXXXXX")"
+  if ! git -C "$tmp" init -q; then
+    rm -rf "$tmp"
+    echo "ERROR: could not initialise a checkout for $repo" >&2
     exit 1
   fi
-  git -C "$dir" checkout -q --detach FETCH_HEAD
+  git -C "$tmp" remote add origin "$repo"
+  if ! git -C "$tmp" fetch --depth 1 origin "$ref"; then
+    rm -rf "$tmp"
+    echo "ERROR: could not fetch $repo at $ref (previous checkout left in place)" >&2
+    exit 1
+  fi
+  if ! git -C "$tmp" checkout -q --detach FETCH_HEAD; then
+    rm -rf "$tmp"
+    echo "ERROR: could not check out $ref in $repo" >&2
+    exit 1
+  fi
+  if [ -e "$dir" ]; then
+    backup="${dir}.old.$$"
+    if ! mv "$dir" "$backup"; then
+      rm -rf "$tmp"
+      echo "ERROR: could not move the previous checkout aside" >&2
+      exit 1
+    fi
+  fi
+  if ! mv "$tmp" "$dir"; then
+    if [ -n "$backup" ]; then mv "$backup" "$dir"; fi
+    rm -rf "$tmp"
+    echo "ERROR: could not move the new checkout into $dir" >&2
+    exit 1
+  fi
+  if [ -n "$backup" ]; then
+    rm -rf "$backup"
+  fi
 }
 
 install_pack() {
@@ -135,22 +164,30 @@ install_pack() {
   log "Skill pack '$name': $linked skills linked (ref $ref)."
 }
 
-mkdir -p "$SKILLS_DEST"
+main() {
+  mkdir -p "$SKILLS_DEST"
 
-# --- packs -----------------------------------------------------------------
-# Add new packs here. See the header for the option reference.
+  # --- packs -----------------------------------------------------------------
+  # Add new packs here. See the header for the option reference.
 
-# addyosmani/agent-skills 0.6.12
-install_pack osmani \
-  --repo https://github.com/addyosmani/agent-skills.git \
-  --ref a06bc63b3f8b829c14b0bbf53d99fefc39d58092 \
-  --omit using-agent-skills \
-  --shared references
+  # addyosmani/agent-skills 0.6.12
+  install_pack osmani \
+    --repo https://github.com/addyosmani/agent-skills.git \
+    --ref a06bc63b3f8b829c14b0bbf53d99fefc39d58092 \
+    --omit using-agent-skills \
+    --shared references
 
-# mattpocock/skills v1.3.1
-install_pack pocock \
-  --repo https://github.com/mattpocock/skills.git \
-  --ref 24fe0ef7737efae15c87225755e9f6f5965e4888 \
-  --include grill-me,grill-with-docs,wayfinder,prototype,research,improve-codebase-architecture,writing-for-agents,pr,codebase-design,domain-modeling,grilling,setup-matt-pocock-skills
+  # mattpocock/skills v1.3.1
+  install_pack pocock \
+    --repo https://github.com/mattpocock/skills.git \
+    --ref 24fe0ef7737efae15c87225755e9f6f5965e4888 \
+    --include grill-me,grill-with-docs,wayfinder,prototype,research,improve-codebase-architecture,writing-for-agents,pr,codebase-design,domain-modeling,grilling,setup-matt-pocock-skills
 
-log "Skill packs installed in $SKILLS_DEST."
+  log "Skill packs installed in $SKILLS_DEST."
+}
+
+# The functions above are sourceable for tests; install the packs only when
+# the script is executed directly.
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+  main "$@"
+fi
