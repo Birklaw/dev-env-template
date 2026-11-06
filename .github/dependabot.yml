@@ -5,7 +5,7 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
-  # The security-scan workflow pins actions by commit SHA; Dependabot bumps it.
+  # The security-scan and tests workflows pin actions by commit SHA; Dependabot bumps them.
   - package-ecosystem: github-actions
     directory: "/"
     schedule:

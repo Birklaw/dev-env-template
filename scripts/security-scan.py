@@ -372,6 +372,25 @@ def load_accepted(path: Path):
     return accepted, True
 
 
+def classify(found, accepted):
+    """Split finding keys into (accepted_seen, new, stale), each sorted."""
+    return sorted(found & accepted), sorted(found - accepted), sorted(accepted - found)
+
+
+def missing_gated_input(accepted, gated_versions):
+    """True when the baseline expects stdlib findings but no gated Go tool ran."""
+    return any(k.startswith("stdlib|") for k in accepted) and not gated_versions
+
+
+def baseline_keys(found):
+    """Keys --print-keys emits: the baseline covers CI-visible sections only.
+
+    Module keys come from --deep, which the scheduled scan does not run, so a
+    baseline regenerated with --print-keys must not carry them.
+    """
+    return sorted(k for k in found if not k.startswith("module|"))
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--deep", action="store_true",
@@ -524,6 +543,10 @@ def main():
             by_version.setdefault(gover, []).append((vid, fixed))
     gated_versions = {b[1] for name, b in bins.items()
                       if b[1] and not name.startswith("mason:")}
+    if missing_gated_input(accepted, gated_versions):
+        print("ERROR: the baseline expects stdlib findings but no gated Go tool "
+              "resolved; refusing to report a green gate", file=sys.stderr)
+        return 2
     for gover in sorted(by_version):
         items = by_version[gover]
         newest = max(fixed for _, fixed in items)
@@ -543,9 +566,6 @@ def main():
             if gover in gated_versions:
                 for vid, reason in items:
                     print(f"         {vid}: {reason}")
-        if args.deep:
-            for vid, fixed in sorted(items):
-                print(f"       {vid} (fixed {fixed})")
 
     if args.deep:
         print("\n== Go binary modules (module-level, verify reachability)")
@@ -578,9 +598,7 @@ def main():
     print("     skill packs            pinned to commit SHAs in template/install-skills.sh")
     print("     base image             ubuntu-24.04 tag; track Microsoft's image updates")
 
-    new = sorted(found - accepted)
-    accepted_seen = sorted(found & accepted)
-    stale = sorted(accepted - found)
+    accepted_seen, new, stale = classify(found, accepted)
     print(f"\naccepted: {len(accepted_seen)}  new: {len(new)}  stale: {len(stale)}"
           f"  unevaluated: {len(set(unevaluated))}  (mason report-only: {mason_hits})")
     for k in new:
@@ -589,7 +607,7 @@ def main():
         print(f"STALE  {k} (no longer reported; remove from {args.accepted} if the risk is gone)")
     if args.print_keys:
         print("\n-- keys --")
-        for k in sorted(found):
+        for k in baseline_keys(found):
             print(k)
         return 0
     if new and not args.warn_only:
