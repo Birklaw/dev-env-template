@@ -93,14 +93,16 @@ security pass.
   Mitigation: neither the Fedora 44 bundle nor the Ubuntu 24.04 devcontainer
   base image trusts `emSign ECC Root CA - G3`, the root named in the uv
   advisory, so the specific chain is not trusted here. Keep
-  `ca-certificates` current and upgrade each tool when upstream rebuilds.
+  `ca-certificates` current and upgrade each tool when upstream rebuilds. The
+  gated build-version hits are listed in the scan baseline below.
 - **Go transitive dependencies.** The same binaries bundle older `x/net`,
   `x/crypto`, `go-jose`, and (in Flux 2.8.x) Helm/go-git/containerd modules
   with module-level OSV hits. Reachability is not established. Flux 2.10.0,
   kubectl 1.37.2, and Terraform 1.16.7 cut the exposure substantially; the
   remaining hits are upstream build choices, not local pins.
 - **Mason-installed tools.** The scan reads the installed Mason packages and
-  reports advisories in their dependency trees and Go build versions. As of
+  reports advisories in their dependency trees and Go build versions; these
+  are **report-only**, not part of the gate, because Mason is host-local. As of
   2026-11-06: `undici 6.26.0` in a Mason tree carries
   GHSA-2m5v-pch6-74hx, the same TLS-validation-bypass advisory that motivated
   the Pi 1.5.0 bump; plus transitive npm hits (`brace-expansion`, `fast-uri`,
@@ -141,14 +143,72 @@ node --version                          -> v24.22.1
 go version                              -> go1.27.3
 ```
 
+## Scan baseline
+
+`scripts/security-scan.py` reads the block below. A finding listed here is
+expected and does not fail the gate; a finding not listed does. Keys are
+precise — `<section>|<identity>|<advisory-id>` — so a new advisory on the same
+build, or the same advisory on a new build, is a new key. Stale keys (listed
+but no longer reported) are printed without failing, so a pin bump flags the
+line to remove. Mason findings — npm/pip transitive versions and Mason-only Go
+build versions — are report-only and are not listed. Regenerate the current
+keys with `scripts/security-scan.py --print-keys`.
+
+<!-- security-scan-accepted
+stdlib|go1.26.1|GO-2026-4864
+stdlib|go1.26.1|GO-2026-4865
+stdlib|go1.26.1|GO-2026-4866
+stdlib|go1.26.1|GO-2026-4869
+stdlib|go1.26.1|GO-2026-4870
+stdlib|go1.26.1|GO-2026-4918
+stdlib|go1.26.1|GO-2026-4946
+stdlib|go1.26.1|GO-2026-4947
+stdlib|go1.26.1|GO-2026-4971
+stdlib|go1.26.1|GO-2026-4976
+stdlib|go1.26.1|GO-2026-4977
+stdlib|go1.26.1|GO-2026-4980
+stdlib|go1.26.1|GO-2026-4981
+stdlib|go1.26.1|GO-2026-4982
+stdlib|go1.26.1|GO-2026-4986
+stdlib|go1.26.1|GO-2026-5037
+stdlib|go1.26.1|GO-2026-5038
+stdlib|go1.26.1|GO-2026-5039
+stdlib|go1.26.1|GO-2026-6603
+stdlib|go1.26.1|GO-2026-6610
+stdlib|go1.26.1|GO-2026-6611
+stdlib|go1.26.1|GO-2026-6612
+stdlib|go1.26.1|GO-2026-6617
+stdlib|go1.26.5|GO-2026-6603
+stdlib|go1.26.5|GO-2026-6610
+stdlib|go1.26.5|GO-2026-6611
+stdlib|go1.26.5|GO-2026-6612
+stdlib|go1.26.5|GO-2026-6617
+stdlib|go1.27.0|GO-2026-6599
+stdlib|go1.27.0|GO-2026-6600
+stdlib|go1.27.0|GO-2026-6603
+stdlib|go1.27.0|GO-2026-6604
+stdlib|go1.27.0|GO-2026-6605
+stdlib|go1.27.0|GO-2026-6607
+stdlib|go1.27.0|GO-2026-6608
+stdlib|go1.27.0|GO-2026-6609
+stdlib|go1.27.0|GO-2026-6610
+stdlib|go1.27.0|GO-2026-6611
+stdlib|go1.27.0|GO-2026-6612
+stdlib|go1.27.0|GO-2026-6613
+stdlib|go1.27.0|GO-2026-6617
+stdlib|go1.27.0|GO-2026-6809
+stdlib|go1.27.2|GO-2026-6809
+-->
+
 ## Recurring checks
 
 Two-weekly, aligned with the 14-day gate:
 
 ```bash
-scripts/security-scan.py              # exits 1 on a finding
-scripts/security-scan.py --deep       # also every module in the Go binaries
-scripts/security-scan.py --warn-only  # report without failing
+scripts/security-scan.py                     # gate: fails only on a new (non-baseline) finding
+scripts/security-scan.py --deep --warn-only  # deep triage report, never fails
+scripts/security-scan.py --no-accepted       # strict: every finding fails
+scripts/security-scan.py --print-keys        # regenerate the baseline block
 ```
 
 The scan resolves the mise pins to the installed versions, queries OSV for
@@ -159,10 +219,12 @@ upstream links for the pins OSV cannot cover (node, python, neovim, herdr,
 devcontainer features, skill packs, the base image, and Mason tools without a
 manifest).
 
-`.github/workflows/security-scan.yml` runs the scan on the 1st and 15th and
-fails on a finding; it installs the pinned toolchain so floating pins resolve
-to real versions. Mason coverage is not available there (Mason is a host-side
-nvim install), so the local run stays the complete one.
+`.github/workflows/security-scan.yml` runs the scan on the 1st and 15th; it
+fails only on a finding that is not in the baseline below, so the accepted
+upstream build versions keep the job green while a genuinely new hit fails it.
+It installs the pinned toolchain so floating pins resolve to real versions.
+Mason coverage is not available there (Mason is a host-side nvim install) and
+is report-only locally too, so the local run stays the complete one.
 `.github/dependabot.yml` opens version-update PRs for the devcontainer
 definition and GitHub Actions; the workflow's `actions/checkout` is pinned by
 commit SHA and Dependabot keeps it current. Dependabot follows upstream tags,

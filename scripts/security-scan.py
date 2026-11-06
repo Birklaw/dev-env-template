@@ -327,12 +327,37 @@ def scan_mason(root: Path):
     }
 
 
+def finding_key(section: str, identity: str, vid: str) -> str:
+    return f"{section}|{identity}|{vid}"
+
+
+def load_accepted(path: Path):
+    """Parse the security-scan-accepted block; return (keys, block_found)."""
+    if not path.exists():
+        return set(), False
+    m = re.search(r"<!--\s*security-scan-accepted\s*\n(.*?)-->", path.read_text(), re.S)
+    if not m:
+        return set(), False
+    accepted = set()
+    for line in m.group(1).splitlines():
+        line = line.strip()
+        if line and not line.startswith("#"):
+            accepted.add(line)
+    return accepted, True
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--deep", action="store_true",
                     help="also scan every module recorded in the Go binaries")
     ap.add_argument("--warn-only", action="store_true",
                     help="always exit 0; report findings without failing")
+    ap.add_argument("--accepted", default=str(REPO / "SECURITY.md"),
+                    help="file holding the security-scan-accepted block")
+    ap.add_argument("--no-accepted", action="store_true",
+                    help="treat every finding as new (strict)")
+    ap.add_argument("--print-keys", action="store_true",
+                    help="print the current finding keys and exit 0")
     ap.add_argument("--dotfiles", default=str(REPO.parent / "dotfiles"))
     ap.add_argument("--mason", default=str(MASON_DEFAULT),
                     help="Mason packages dir (default: ~/.local/share/nvim/mason/packages)")
@@ -342,6 +367,13 @@ def main():
     if not setup_mise.exists():
         print(f"ERROR: {setup_mise} not found", file=sys.stderr)
         return 2
+
+    accepted = set()
+    if not args.no_accepted:
+        accepted, have_block = load_accepted(Path(args.accepted))
+        if not have_block:
+            print(f"WARNING: no security-scan-accepted block in {args.accepted}; "
+                  "treating every finding as new", file=sys.stderr)
 
     mise_json = {}
     out = run(["mise", "ls", "--json"]).stdout
@@ -416,14 +448,15 @@ def main():
     results = osv_batch(all_queries) if all_queries else []
     direct_results = results[:len(queries)]
     mason_results = results[len(queries):]
-    hits = 0
+    found = set()
+    mason_hits = 0
     print("== direct pins")
     for label, result in zip(labels, direct_results):
         vulns = result.get("vulns", [])
         if vulns:
-            hits += 1
-            ids = ", ".join(v["id"] for v in vulns)
-            print(f"HIT  {label} -> {ids}")
+            ids = [v["id"] for v in vulns]
+            found.update(finding_key("direct", label, vid) for vid in ids)
+            print(f"HIT  {label} -> {', '.join(ids)}")
         else:
             print(f"OK   {label}")
 
@@ -440,8 +473,8 @@ def main():
         for label, result in zip(mason_labels, mason_results):
             vulns = result.get("vulns", [])
             if vulns:
-                hits += 1
-                print(f"HIT  {label} -> {', '.join(v['id'] for v in vulns)}")
+                mason_hits += 1
+                print(f"HIT  {label} -> {', '.join(v['id'] for v in vulns)} (report-only)")
             else:
                 clean += 1
         print(f"     clean: {clean}")
@@ -459,11 +492,18 @@ def main():
     by_version = {}
     for gover, vid, fixed in stdlib_findings(go_versions):
         by_version.setdefault(gover, []).append((vid, fixed))
+    gated_versions = {b[1] for name, b in bins.items()
+                      if b[1] and not name.startswith("mason:")}
     for gover in sorted(by_version):
         items = by_version[gover]
         newest = max(fixed for _, fixed in items)
-        hits += len(items)
-        print(f"HIT  {gover}: {len(items)} stdlib advisory(ies), newest fix {newest}")
+        report_only = gover not in gated_versions
+        if report_only:
+            mason_hits += len(items)
+        else:
+            found.update(finding_key("stdlib", gover, vid) for vid, _ in items)
+        suffix = " (report-only)" if report_only else ""
+        print(f"HIT  {gover}: {len(items)} stdlib advisory(ies), newest fix {newest}{suffix}")
         if args.deep:
             for vid, fixed in sorted(items):
                 print(f"       {vid} (fixed {fixed})")
@@ -483,8 +523,14 @@ def main():
         for label, result in zip(dep_labels, dep_results):
             vulns = result.get("vulns", [])
             if vulns:
-                hits += 1
-                print(f"HIT  {label} -> {', '.join(v['id'] for v in vulns)}")
+                ids = [v["id"] for v in vulns]
+                text = f"{label} -> {', '.join(ids)}"
+                if label.startswith("mason:"):
+                    mason_hits += 1
+                    print(f"HIT  {text} (report-only)")
+                else:
+                    found.update(finding_key("module", label, vid) for vid in ids)
+                    print(f"HIT  {text}")
 
     print("\n== manual upstream checks")
     for item in manual:
@@ -493,8 +539,21 @@ def main():
     print("     skill packs            pinned to commit SHAs in template/install-skills.sh")
     print("     base image             ubuntu-24.04 tag; track Microsoft's image updates")
 
-    print(f"\n{hits} finding(s).")
-    if hits and not args.warn_only:
+    new = sorted(found - accepted)
+    accepted_seen = sorted(found & accepted)
+    stale = sorted(accepted - found)
+    print(f"\naccepted: {len(accepted_seen)}  new: {len(new)}  stale: {len(stale)}"
+          f"  (mason report-only: {mason_hits})")
+    for k in new:
+        print(f"NEW    {k}")
+    for k in stale:
+        print(f"STALE  {k} (no longer reported; remove from {args.accepted} if the risk is gone)")
+    if args.print_keys:
+        print("\n-- keys --")
+        for k in sorted(found):
+            print(k)
+        return 0
+    if new and not args.warn_only:
         return 1
     return 0
 
