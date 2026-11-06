@@ -504,12 +504,14 @@ restart Docker (that is the direct-rule idempotency contract).
 | Path | Purpose |
 | --- | --- |
 | `bootstrap.sh` | Router: detect OS family (fail-closed) → dispatch to a target |
+| `AGENTS.md` | Navigation pointer for agents: layout, check command, review drop |
 | `targets/fedora.sh` | Fedora host base layer: dnf packages + docker |
 | `targets/debian.sh` | Debian-family/Armbian host base layer: apt, docker-ce, gh apt repo |
 | `lib/common.sh` | Distro-agnostic host steps (devpod, docker group, nerd font, mise) |
 | `lib/container-egress-guard.sh` | Container egress guard (installed to `/usr/local/sbin`) |
 | `tests/` | Stub-driven tests: `./tests/run.sh` (no sudo, no host mutation) |
 | `SECURITY.md` | Supply-chain policy, exception log, accepted risks, recurring checks |
+| `scripts/check.sh` | One check entry point (shell, Python, tests, whitespace); CI runs it |
 | `scripts/security-scan.py` | Two-weekly OSV scan for the pinned toolchain (see `SECURITY.md`) |
 | `.github/workflows/security-scan.yml` | Scheduled (1st/15th) run of the scan on the declared pins |
 | `.github/workflows/tests.yml` | Stub-driven tests on push/PR (the scan gate needs a merge-time check) |
