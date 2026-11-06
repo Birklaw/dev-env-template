@@ -35,6 +35,9 @@
     //   docker-outside-of-docker: moby-cli from
     //   https://packages.microsoft.com/repos/microsoft-ubuntu-noble-prod/
     //   (verified against the host Docker CLI); buildx from the same repo.
+    //   compose is the one intentional float: the feature's
+    //   dockerDashComposeVersion option only accepts none/latest/v1/v2, so "v2"
+    //   is the narrowest value it offers.
     //   github-cli: the official gh release from GitHub (host is 2.97.0).
     "ghcr.io/devcontainers/features/docker-outside-of-docker:1.10.1": {
       "version": "29.9.2",

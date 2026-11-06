@@ -53,6 +53,10 @@ csv_contains() {
 ensure_checkout() {
   local name="$1" repo="$2" ref="$3" dir current="" tmp backup=""
   dir="$(checkout_dir "$name")"
+  if ! printf '%s' "$ref" | grep -Eq '^[0-9a-f]{40}$'; then
+    echo "ERROR: ensure_checkout $name: ref must be a full 40-character commit SHA (got '$ref')" >&2
+    exit 1
+  fi
   if [ -d "$dir/.git" ]; then
     current="$(git -C "$dir" rev-parse HEAD 2>/dev/null || true)"
   fi
@@ -66,7 +70,8 @@ ensure_checkout() {
   # directory that fails the whole bootstrap.
   mkdir -p "$CHECKOUT_ROOT"
   # Sweep temp checkouts left by an interrupted run.
-  find "$CHECKOUT_ROOT" -maxdepth 1 -name '.checkout.*' -exec rm -rf {} + 2>/dev/null || true
+  # Only temp dirs from an interrupted run: leave a concurrent run's fresh one alone.
+  find "$CHECKOUT_ROOT" -maxdepth 1 -name '.checkout.*' -mmin +60 -exec rm -rf {} + 2>/dev/null || true
   tmp="$(mktemp -d "$CHECKOUT_ROOT/.checkout.XXXXXX")"
   if ! git -C "$tmp" init -q; then
     rm -rf "$tmp"

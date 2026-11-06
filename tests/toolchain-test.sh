@@ -63,6 +63,12 @@ git -C "$src" commit -qam two
 sha2="$(git -C "$src" rev-parse HEAD)"
 
 mkdir -p "$CHECKOUT_ROOT/.checkout.stale"
+touch -d '2 hours ago' "$CHECKOUT_ROOT/.checkout.stale"
+if (ensure_checkout pack "$src" not-a-sha) >/dev/null 2>&1; then
+  fail 'ensure_checkout should reject a non-SHA ref'
+else
+  pass
+fi
 ensure_checkout pack "$src" "$sha1" >/dev/null 2>&1
 assert_eq "$?" "0" 'initial checkout exits 0'
 assert_eq "$(git -C "$CHECKOUT_ROOT/pack" rev-parse HEAD 2>/dev/null)" "$sha1" 'initial checkout'
