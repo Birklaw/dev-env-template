@@ -475,30 +475,66 @@ EOF
   exit 1
 }
 
-# ---------- devpod CLI (architecture-aware) ----------
+# ---------- devpod CLI (architecture-aware, pinned + verified) ----------
+# Pin the stable release and verify each CLI asset against a SHA-256 hardcoded
+# here. The trust root is this repo, not the release channel: a replaced or
+# tampered asset fails the check and aborts the bootstrap. Upstream publishes
+# no checksum file or attestation for the CLI assets (only an AppImage
+# signature), so the hashes below were computed from the v0.6.15 release.
+# Bump procedure: download the new per-arch assets, run sha256sum, update the
+# version and both digests. armv7 is not published upstream; fail closed
+# rather than fall back to an unverified URL.
 install_devpod() {
   if ! command -v devpod &>/dev/null; then
     echo "==> Installing devpod CLI..."
-    local ARCH URL
+    local DEVPOD_VERSION="v0.6.15"
+    local DEVPOD_SHA256_AMD64="cc50bce09229d5a6d448ac1d4494327f4b8f7a20321e5fcee3bfec1aef0d20c5"
+    local DEVPOD_SHA256_ARM64="9226161e0c9f5a45d0f8d1778f940498e787b650f0e0fcf3c29f1f67e7a3f272"
+    local ARCH URL SHA TMP GOT
     ARCH="$(uname -m)"
     case "$ARCH" in
       x86_64)
-        URL="https://github.com/loft-sh/devpod/releases/latest/download/devpod-linux-amd64"
+        URL="https://github.com/loft-sh/devpod/releases/download/${DEVPOD_VERSION}/devpod-linux-amd64"
+        SHA="$DEVPOD_SHA256_AMD64"
         ;;
       aarch64|arm64)
-        URL="https://github.com/loft-sh/devpod/releases/latest/download/devpod-linux-arm64"
+        URL="https://github.com/loft-sh/devpod/releases/download/${DEVPOD_VERSION}/devpod-linux-arm64"
+        SHA="$DEVPOD_SHA256_ARM64"
         ;;
       armv7l|armhf)
-        URL="https://github.com/loft-sh/devpod/releases/latest/download/devpod-linux-arm"
+        echo "ERROR: DevPod publishes no armv7 CLI asset; use x86_64 or aarch64/arm64." >&2
+        exit 1
         ;;
       *)
         echo "ERROR: Unsupported architecture: $ARCH" >&2
-        echo "Supported: x86_64, aarch64/arm64, armv7l/armhf" >&2
+        echo "Supported: x86_64, aarch64/arm64" >&2
         exit 1
         ;;
     esac
-    curl -fsSL -o /tmp/devpod "$URL"
-    sudo install -c -m 0755 /tmp/devpod /usr/local/bin && rm -f /tmp/devpod
+    TMP="$(mktemp)"
+    if ! curl -fsSL -o "$TMP" "$URL"; then
+      rm -f "$TMP"
+      echo "ERROR: could not download $URL" >&2
+      exit 1
+    fi
+    if ! echo "${SHA}  $TMP" | sha256sum -c - >/dev/null; then
+      rm -f "$TMP"
+      echo "ERROR: checksum mismatch for $URL" >&2
+      exit 1
+    fi
+    GOT="$("$TMP" version 2>/dev/null || true)"
+    if [ "$GOT" != "$DEVPOD_VERSION" ]; then
+      rm -f "$TMP"
+      echo "ERROR: devpod binary reports '${GOT:-no version}', expected $DEVPOD_VERSION" >&2
+      exit 1
+    fi
+    if ! sudo install -c -m 0755 "$TMP" /usr/local/bin/devpod; then
+      rm -f "$TMP"
+      echo "ERROR: could not install devpod to /usr/local/bin" >&2
+      exit 1
+    fi
+    rm -f "$TMP"
+    echo "    [ok]   devpod $DEVPOD_VERSION (sha256 verified)"
   fi
 }
 
