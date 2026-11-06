@@ -57,11 +57,18 @@ Added on 2026-11-05/06:
 - **DevPod CLI**: pinned to `v0.6.15`; the amd64/arm64 assets are verified
   against SHA-256s hardcoded in `lib/common.sh` (upstream publishes no CLI
   checksum file or attestation). armv7 fails closed, as no asset is published.
-- **mise**: still bootstrapped via `curl | sh`. The installer verifies the
-  downloaded archive against the release's checksum and supports
-  `MISE_VERSION`; pinning or vendoring the installer is the remaining open
-  item. `mise self-update` applies `self_update.minimum_release_age`, which
-  inherits the 14-day setting, and `self_update.auto` is off by default.
+- **mise**: bootstrapped from a pinned release; the `.tar.gz` archive is
+  verified against a SHA-256 hardcoded in `template/setup-mise.sh`, with the
+  official installer as the fallback for an unknown arch or a failed download.
+  `mise self-update` inherits the 14-day gate via
+  `self_update.minimum_release_age`, and `self_update.auto = true` enables the
+  automatic check before network commands without letting a release newer than
+  14 days through.
+- **Dependabot / GitHub Actions**: `.github/dependabot.yml` covers the
+  devcontainer definition and is ready for `github-actions`. When the first
+  workflow lands, pin each action to a full commit SHA rather than a movable
+  tag; Dependabot's `github-actions` ecosystem updates the SHA and the version
+  comment.
 - **Devcontainer features**: refs pinned to exact tags and tool versions
   (`docker-outside-of-docker:1.10.1` -> moby 29.9.2, buildx 0.38.1, compose
   v2; `github-cli:1.1.3` -> gh 2.97.0). The base image stays `ubuntu-24.04`.
@@ -96,11 +103,9 @@ security pass.
   says `3.13`; `flate` is installed but absent from
   `~/.config/mise/config.toml`. Reconcile on the next bootstrap. Neither is a
   current CVE blocker.
-- **Open supply-chain item.** mise is still bootstrapped via `curl | sh`
-  (the installer verifies the downloaded archive's checksum). Pinning the
-  installer version, or vendoring the archive and checking a repo-hardcoded
-  SHA-256, is the remaining follow-up. The devcontainer base image is still a
-  tag (`ubuntu-24.04`); a digest pin is not in place.
+- **Open item.** The devcontainer base image is still a tag (`ubuntu-24.04`);
+  a digest pin is not in place. The features and their tool versions are
+  pinned, and the mise installer is now pinned and verified.
 
 ## Verification
 
@@ -119,6 +124,26 @@ devpod version                          -> v0.6.15
 node --version                          -> v24.22.1
 go version                              -> go1.27.3
 ```
+
+## Recurring checks
+
+Two-weekly, aligned with the 14-day gate:
+
+```bash
+scripts/security-scan.py              # exits 1 on a finding
+scripts/security-scan.py --deep       # also every module in the Go binaries
+scripts/security-scan.py --warn-only  # report without failing
+```
+
+The scan resolves the mise pins to the installed versions, queries OSV for
+npm, PyPI, crates.io and Go modules, and checks each Go tool's stdlib build
+version against the Go vuln DB. It prints manual upstream links for the pins
+OSV cannot cover (node, python, neovim, herdr, devcontainer features, skill
+packs, the base image). Dependabot alerts are enabled in the repository
+settings; `.github/dependabot.yml` opens version-update PRs for the
+devcontainer features and GitHub Actions. They are complements: Dependabot
+follows upstream tags, the scan follows advisories. When workflows exist, pin
+each action to a full commit SHA; Dependabot keeps those SHA pins current.
 
 ## Adding an exception
 

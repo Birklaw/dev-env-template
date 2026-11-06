@@ -509,6 +509,8 @@ restart Docker (that is the direct-rule idempotency contract).
 | `lib/common.sh` | Distro-agnostic host steps (devpod, docker group, nerd font, mise) |
 | `lib/container-egress-guard.sh` | Container egress guard (installed to `/usr/local/sbin`) |
 | `tests/` | Stub-driven tests: `./tests/run.sh` (no sudo, no host mutation) |
+| `SECURITY.md` | Supply-chain policy, exception log, accepted risks, recurring checks |
+| `scripts/security-scan.py` | Two-weekly OSV scan for the pinned toolchain (see `SECURITY.md`) |
 | `template/setup-mise.sh` | Shared toolchain installer — runs on the host and in every devcontainer |
 | `template/install-skills.sh` | Shared skill-pack installer — installs configured packs into Pi's global skills dir; runs on the host and in every devcontainer |
 | `template/install-pi-packages.sh` | Shared Pi package installer (providers/extensions) — runs on the host and in every devcontainer |
