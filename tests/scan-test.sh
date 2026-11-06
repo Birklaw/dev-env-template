@@ -9,7 +9,7 @@ set -uo pipefail
 trap sandbox_cleanup EXIT
 sandbox_init
 
-if python3 - "$REPO_ROOT/scripts/security-scan.py" <<'PY'
+if PYTHONDONTWRITEBYTECODE=1 python3 - "$REPO_ROOT/scripts/security-scan.py" <<'PY'
 import importlib.util
 import sys
 
