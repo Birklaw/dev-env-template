@@ -58,7 +58,8 @@ Added on 2026-11-05/06:
   `/usr/local/bin/devpod` against the per-arch SHA-256 hardcoded in
   `lib/common.sh` and replaces it on mismatch, so hosts bootstrapped before the
   pin are verified too; a devpod installed elsewhere is left alone with a
-  warning. Upstream publishes no CLI checksum file or attestation. armv7 fails
+  warning. The stable pin deliberately wins over a newer or alpha build at that
+  path. Upstream publishes no CLI checksum file or attestation. armv7 fails
   closed, as no asset is published.
 - **mise**: bootstrapped from a pinned release; the `.tar.gz` archive is
   verified against a SHA-256 hardcoded in `template/setup-mise.sh`, with the
