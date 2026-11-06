@@ -65,6 +65,8 @@ ensure_checkout() {
   # failed re-pin leaves the previous checkout in place instead of an empty
   # directory that fails the whole bootstrap.
   mkdir -p "$CHECKOUT_ROOT"
+  # Sweep temp checkouts left by an interrupted run.
+  find "$CHECKOUT_ROOT" -maxdepth 1 -name '.checkout.*' -exec rm -rf {} + 2>/dev/null || true
   tmp="$(mktemp -d "$CHECKOUT_ROOT/.checkout.XXXXXX")"
   if ! git -C "$tmp" init -q; then
     rm -rf "$tmp"
@@ -83,7 +85,8 @@ ensure_checkout() {
     exit 1
   fi
   if [ -e "$dir" ]; then
-    backup="${dir}.old.$$"
+    backup="${dir}.old"
+    rm -rf "$backup"
     if ! mv "$dir" "$backup"; then
       rm -rf "$tmp"
       echo "ERROR: could not move the previous checkout aside" >&2
