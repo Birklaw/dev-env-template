@@ -28,6 +28,20 @@ else
   pass
 fi
 
+echo '== devpod status branches'
+bin="$SANDBOX/devpod.bin"
+printf 'pinned\n' >"$bin"
+bin_sha="$(sha256sum "$bin" | awk '{print $1}')"
+other="$SANDBOX/other-devpod"
+printf 'other\n' >"$other"
+saved_install_path="$DEVPOD_INSTALL_PATH"
+DEVPOD_INSTALL_PATH="$bin"
+assert_eq "$(devpod_status "" "$bin_sha")" "install" 'absent path -> install'
+assert_eq "$(devpod_status "$bin" "$bin_sha")" "ok" 'matching hash -> ok'
+assert_eq "$(devpod_status "$bin" 0000000000000000000000000000000000000000000000000000000000000000)" "replace" 'mismatched hash -> replace'
+assert_eq "$(devpod_status "$other" "$bin_sha")" "elsewhere" 'other path -> elsewhere'
+DEVPOD_INSTALL_PATH="$saved_install_path"
+
 echo '== ensure_checkout keeps the previous tree on failure'
 export CHECKOUT_ROOT="$SANDBOX/checkouts"
 export SKILLS_HOME="$SANDBOX/agents"
