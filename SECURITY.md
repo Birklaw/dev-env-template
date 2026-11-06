@@ -50,16 +50,26 @@ Notes:
 - Pi 1.5.0's installed dependency tree was scanned with OSV: 0 hits across 126
   packages. A fresh Pi session is required to pick it up.
 
-## Repo pin state
+## Supply-chain controls
 
-This record describes the host after the 2026-11-05 response. Pin changes land
-separately; verify `template/setup-mise.sh` before the next bootstrap. In
-particular:
+Added on 2026-11-05/06:
 
-- The host `uv` is 0.13.5, but the script still pins `uv@0.12`. Bump it before
-  the next bootstrap so the vulnerable minor cannot be reintroduced.
-- The Pi `1.5.0` bump is in `template/setup-mise.sh` and must be committed with
-  (or before) the next toolchain change.
+- **DevPod CLI**: pinned to `v0.6.15`; the amd64/arm64 assets are verified
+  against SHA-256s hardcoded in `lib/common.sh` (upstream publishes no CLI
+  checksum file or attestation). armv7 fails closed, as no asset is published.
+- **mise**: still bootstrapped via `curl | sh`. The installer verifies the
+  downloaded archive against the release's checksum and supports
+  `MISE_VERSION`; pinning or vendoring the installer is the remaining open
+  item. `mise self-update` applies `self_update.minimum_release_age`, which
+  inherits the 14-day setting, and `self_update.auto` is off by default.
+- **Devcontainer features**: refs pinned to exact tags and tool versions
+  (`docker-outside-of-docker:1.10.1` -> moby 29.9.2, buildx 0.38.1, compose
+  v2; `github-cli:1.1.3` -> gh 2.97.0). The base image stays `ubuntu-24.04`.
+- **Skill packs**: pinned to commit SHAs; `--ref` rejects a non-SHA value.
+- **ca-certificates**: upgraded explicitly on host bootstrap and container
+  post-create (GO-2026-6809 mitigation for tools built below Go 1.26.10).
+- **Toolchain pins**: uv moved to 0.13 and Pi to 1.5.0 in
+  `template/setup-mise.sh`, committing the exception-log entries above.
 
 ## Accepted or deferred risk
 
@@ -86,11 +96,11 @@ security pass.
   says `3.13`; `flate` is installed but absent from
   `~/.config/mise/config.toml`. Reconcile on the next bootstrap. Neither is a
   current CVE blocker.
-- **Supply-chain backlog.** DevPod is installed from `releases/latest` without
-  a checksum; mise is bootstrapped via `curl | sh`; the devcontainer base
-  image is a tag and both features use `"version": "latest"`; skill packs are
-  cloned at movable tags. These are tracked as separate follow-ups, not part
-  of this incident.
+- **Open supply-chain item.** mise is still bootstrapped via `curl | sh`
+  (the installer verifies the downloaded archive's checksum). Pinning the
+  installer version, or vendoring the archive and checking a repo-hardcoded
+  SHA-256, is the remaining follow-up. The devcontainer base image is still a
+  tag (`ubuntu-24.04`); a digest pin is not in place.
 
 ## Verification
 
@@ -105,6 +115,7 @@ terraform version                       -> 1.16.7 (go1.26.10)
 kubectl version --client                -> v1.37.2
 flux --version                          -> 2.10.0
 pi --version                            -> 1.5.0
+devpod version                          -> v0.6.15
 node --version                          -> v24.22.1
 go version                              -> go1.27.3
 ```
