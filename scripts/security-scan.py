@@ -177,30 +177,56 @@ def go_tuple(v: str):
     return tuple(nums)
 
 
-def stdlib_findings(go_versions):
-    """Return [(go_version, vuln_id, fixed)] for advisories on the same branch."""
+def load_stdlib_index():
+    """Fetch and validate the Go stdlib index.
+
+    A failed fetch or a schema change is exit 2, not an empty result: an empty
+    result would make the gate green having checked nothing.
+    """
     try:
         with urllib.request.urlopen(VULN_GO_INDEX, timeout=60) as resp:
             index = json.load(resp)
-    except (urllib.error.URLError, TimeoutError) as exc:
-        print(f"WARNING: could not fetch {VULN_GO_INDEX}: {exc}", file=sys.stderr)
-        return []
+    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+        print(f"ERROR: could not fetch {VULN_GO_INDEX}: {exc}", file=sys.stderr)
+        sys.exit(2)
     entry = next((e for e in index if e.get("path") == "stdlib"), None)
-    if not entry:
-        return []
-    findings = []
+    if not entry or not entry.get("vulns"):
+        print(f"ERROR: {VULN_GO_INDEX} has no usable stdlib entry; refusing to "
+              "report a green gate", file=sys.stderr)
+        sys.exit(2)
+    return entry
+
+
+def stdlib_findings(entry, go_versions):
+    """Return (findings, unevaluated) for the installed Go versions.
+
+    findings: [(gover, vuln_id, fixed)] resolved on the build's own branch.
+    unevaluated: [(gover, vuln_id, reason)] with no branch-local fix the index
+    can use; they are reported but never gate.
+    """
+    by_id = {}
+    for vuln in entry.get("vulns", []):
+        by_id.setdefault(vuln["id"], []).append(vuln.get("fixed") or "")
+    findings, unevaluated = [], []
     for gover in go_versions:
         gnums = go_tuple(gover)
-        for vuln in entry.get("vulns", []):
-            fixed = vuln.get("fixed") or ""
-            if not fixed:
+        for vid, fixes in sorted(by_id.items()):
+            nonempty = [f for f in fixes if f]
+            if not nonempty:
+                unevaluated.append((gover, vid, "no fixed version recorded"))
                 continue
-            fnums = go_tuple(fixed)
-            if fnums[:2] != gnums[:2]:
-                continue  # different release branch; not this build
-            if gnums < fnums:
-                findings.append((gover, vuln["id"], fixed))
-    return findings
+            same = [(f, go_tuple(f)) for f in nonempty if go_tuple(f)[:2] == gnums[:2]]
+            if any(fn <= gnums for _, fn in same):
+                continue  # fixed on this branch at or before the build
+            newer_same = sorted((fn, f) for f, fn in same if fn > gnums)
+            if newer_same:
+                findings.append((gover, vid, newer_same[0][1]))
+                continue
+            newer_any = sorted((go_tuple(f), f) for f in nonempty if go_tuple(f) > gnums)
+            if newer_any:
+                unevaluated.append((gover, vid, f"fix {newer_any[0][1]} is on another branch"))
+            # else: every known fix predates the build; already fixed
+    return findings, unevaluated
 
 
 def go_binaries(mise_json: dict):
@@ -489,9 +515,13 @@ def main():
         print("(no installed Go tools found; run `mise install` first)")
     for name, (_, gover, _) in sorted(bins.items()):
         print(f"     {name:12s} {gover or 'unknown build version'}")
+    unevaluated = []
     by_version = {}
-    for gover, vid, fixed in stdlib_findings(go_versions):
-        by_version.setdefault(gover, []).append((vid, fixed))
+    if go_versions:
+        stdlib_entry = load_stdlib_index()
+        findings, unevaluated = stdlib_findings(stdlib_entry, go_versions)
+        for gover, vid, fixed in findings:
+            by_version.setdefault(gover, []).append((vid, fixed))
     gated_versions = {b[1] for name, b in bins.items()
                       if b[1] and not name.startswith("mason:")}
     for gover in sorted(by_version):
@@ -504,6 +534,15 @@ def main():
             found.update(finding_key("stdlib", gover, vid) for vid, _ in items)
         suffix = " (report-only)" if report_only else ""
         print(f"HIT  {gover}: {len(items)} stdlib advisory(ies), newest fix {newest}{suffix}")
+    if unevaluated:
+        print("     UNEVALUATED stdlib advisory(ies); check the full advisory:")
+        for gover in sorted({u[0] for u in unevaluated}):
+            items = sorted({(u[1], u[2]) for u in unevaluated if u[0] == gover})
+            suffix = "" if gover in gated_versions else " (report-only)"
+            print(f"       {gover}: {len(items)} candidate(s){suffix}")
+            if gover in gated_versions:
+                for vid, reason in items:
+                    print(f"         {vid}: {reason}")
         if args.deep:
             for vid, fixed in sorted(items):
                 print(f"       {vid} (fixed {fixed})")
@@ -543,7 +582,7 @@ def main():
     accepted_seen = sorted(found & accepted)
     stale = sorted(accepted - found)
     print(f"\naccepted: {len(accepted_seen)}  new: {len(new)}  stale: {len(stale)}"
-          f"  (mason report-only: {mason_hits})")
+          f"  unevaluated: {len(set(unevaluated))}  (mason report-only: {mason_hits})")
     for k in new:
         print(f"NEW    {k}")
     for k in stale:
