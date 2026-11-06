@@ -62,7 +62,7 @@ mise use -g \
   node@24 \
   python@3.14 \
   go@1.27 \
-  uv@0.12 \
+  uv@0.13 \
   pnpm@12 \
   kubectl@1.37 \
   helm@4 \
@@ -75,6 +75,9 @@ mise use -g \
 # sops: secret encryption; 3.13 is the minor boundary (sops is pre-4.0).
 # flate: not in the mise registry — the GitHub backend verifies the release
 # checksum. Kept at the 0.x minor boundary like the other 0.x tools.
+# uv: 0.13.4 fixed GHSA-hq85-5cpj-mr62 (the eMudhra CA in uv's vendored
+# trust store); 0.13.5 is the gate-compliant release today. uv 0.13 defaults
+# to Python 3.15 when nothing is pinned; this toolchain pins 3.14 explicitly.
 
 # ---------- terminal IDE toolset (LazyVim) ----------
 # Neovim is the primary editor (LazyVim); runs on the VM and in every
@@ -118,9 +121,12 @@ export PATH="$PNPM_HOME:$PATH"
 # pi: npm package (@earendil-works/pi-coding-agent, binary: pi) — mise's npm
 # backend needs node, which the toolset above provides. Pi's docs state
 # install scripts aren't required, so mise's --ignore-scripts default is fine.
+# 1.5.0 is the first release with undici 8.12.3 and minimatch 11.0.3
+# (GHSA-2m5v-pch6-74hx and GHSA-g3hv-75wg-m249). Exact pins bypass
+# minimum_release_age, so this bump is a recorded security exception.
 mise use -g \
   herdr@0.9 \
-  "npm:@earendil-works/pi-coding-agent@1.1.0"
+  "npm:@earendil-works/pi-coding-agent@1.5.0"
 
 echo "==> mise toolset installed:"
 mise ls
