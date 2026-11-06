@@ -70,6 +70,11 @@ esac
 # age: FluxCD recommendation for k8s secret encryption.
 sudo apt-get update
 $APT install -y ca-certificates curl fontconfig xz-utils git vim build-essential tmux chromium age
+# ca-certificates: security-sensitive. apt-get install does not upgrade an
+# already-installed package, so ask for the newer trust store explicitly —
+# it is the mitigation for Go tools built below Go 1.26.10 (GO-2026-6809/
+# CVE-2026-111943, the compromised eMudhra intermediates). See SECURITY.md.
+$APT install -y --only-upgrade ca-certificates
 
 # ---------- system libs for native Node.js / pnpm binaries ----------
 # Minimal ARM images can lack libatomic, causing "libatomic.so.1: cannot
