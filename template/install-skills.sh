@@ -13,7 +13,9 @@
 # ADDING A PACK: add an install_pack call at the bottom of this file. Options:
 #
 #   --repo <url>        git URL (required)
-#   --ref <ref>         tag/branch/commit the pack is held at (required)
+#   --ref <sha>         full 40-char commit SHA the pack is held at (required);
+#                       tags are movable, so record the release tag in a
+#                       comment beside the call instead
 #   --subdir <dir>      directory inside the repo that holds the skills
 #                       (default: skills)
 #   --include <a,b,..>  install only these skill names (optional; default: all)
@@ -45,21 +47,29 @@ csv_contains() {
   return 1
 }
 
-# Clone a pack at its ref, or re-pin an existing checkout when the ref moved.
+# Clone a pack at its commit, or re-pin an existing checkout when the commit
+# differs. Commits are fetched explicitly: `git clone --branch` accepts a
+# branch or tag, not a raw SHA.
 ensure_checkout() {
-  local name="$1" repo="$2" ref="$3" dir
+  local name="$1" repo="$2" ref="$3" dir current=""
   dir="$(checkout_dir "$name")"
-  if [ ! -d "$dir/.git" ]; then
-    log "Cloning skill pack '$name' at $ref..."
-    mkdir -p "$CHECKOUT_ROOT"
-    git clone --depth 1 --branch "$ref" "$repo" "$dir"
-  elif [ "$(git -C "$dir" describe --tags --exact-match 2>/dev/null || true)" != "$ref" ]; then
-    log "Re-pinning skill pack '$name' to $ref..."
-    rm -rf "$dir"
-    git clone --depth 1 --branch "$ref" "$repo" "$dir"
-  else
-    log "Skill pack '$name' already at $ref."
+  if [ -d "$dir/.git" ]; then
+    current="$(git -C "$dir" rev-parse HEAD 2>/dev/null || true)"
   fi
+  if [ "$current" = "$ref" ]; then
+    log "Skill pack '$name' already at $ref."
+    return 0
+  fi
+  log "Cloning skill pack '$name' at $ref..."
+  rm -rf "$dir"
+  mkdir -p "$dir"
+  git -C "$dir" init -q
+  git -C "$dir" remote add origin "$repo"
+  if ! git -C "$dir" fetch --depth 1 origin "$ref"; then
+    echo "ERROR: could not fetch $repo at $ref" >&2
+    exit 1
+  fi
+  git -C "$dir" checkout -q --detach FETCH_HEAD
 }
 
 install_pack() {
@@ -78,6 +88,10 @@ install_pack() {
   done
   if [ -z "$repo" ] || [ -z "$ref" ]; then
     echo "ERROR: install_pack $name requires --repo and --ref" >&2
+    exit 1
+  fi
+  if ! printf '%s' "$ref" | grep -Eq '^[0-9a-f]{40}$'; then
+    echo "ERROR: install_pack $name: --ref must be a full 40-character commit SHA (got '$ref')" >&2
     exit 1
   fi
 
@@ -126,15 +140,17 @@ mkdir -p "$SKILLS_DEST"
 # --- packs -----------------------------------------------------------------
 # Add new packs here. See the header for the option reference.
 
+# addyosmani/agent-skills 0.6.12
 install_pack osmani \
   --repo https://github.com/addyosmani/agent-skills.git \
-  --ref 0.6.12 \
+  --ref a06bc63b3f8b829c14b0bbf53d99fefc39d58092 \
   --omit using-agent-skills \
   --shared references
 
+# mattpocock/skills v1.3.1
 install_pack pocock \
   --repo https://github.com/mattpocock/skills.git \
-  --ref v1.3.1 \
+  --ref 24fe0ef7737efae15c87225755e9f6f5965e4888 \
   --include grill-me,grill-with-docs,wayfinder,prototype,research,improve-codebase-architecture,writing-for-agents,pr,codebase-design,domain-modeling,grilling,setup-matt-pocock-skills
 
 log "Skill packs installed in $SKILLS_DEST."
