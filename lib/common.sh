@@ -476,66 +476,99 @@ EOF
 }
 
 # ---------- devpod CLI (architecture-aware, pinned + verified) ----------
-# Pin the stable release and verify each CLI asset against a SHA-256 hardcoded
-# here. The trust root is this repo, not the release channel: a replaced or
-# tampered asset fails the check and aborts the bootstrap. Upstream publishes
-# no checksum file or attestation for the CLI assets (only an AppImage
-# signature), so the hashes below were computed from the v0.6.15 release.
+# Pin the stable release and verify the installed CLI against a SHA-256
+# hardcoded here on every bootstrap, not just the first install. The trust root
+# is this repo, not the release channel: a replaced or tampered asset fails the
+# check and aborts the bootstrap. Upstream publishes no checksum file or
+# attestation for the CLI assets (only an AppImage signature), so the hashes
+# below were computed from the v0.6.15 release.
+#
+# An existing binary at /usr/local/bin/devpod is hashed against the pin and
+# replaced when it does not match. That closes hosts bootstrapped before this
+# pin existed: the old code fetched releases/latest, which was the same
+# version but never verified it. A devpod installed anywhere else is left
+# alone with a warning rather than clobbering a distro or manual install.
+#
 # Bump procedure: download the new per-arch assets, run sha256sum, update the
 # version and both digests. armv7 is not published upstream; fail closed
 # rather than fall back to an unverified URL.
-install_devpod() {
-  if ! command -v devpod &>/dev/null; then
-    echo "==> Installing devpod CLI..."
-    local DEVPOD_VERSION="v0.6.15"
-    local DEVPOD_SHA256_AMD64="cc50bce09229d5a6d448ac1d4494327f4b8f7a20321e5fcee3bfec1aef0d20c5"
-    local DEVPOD_SHA256_ARM64="9226161e0c9f5a45d0f8d1778f940498e787b650f0e0fcf3c29f1f67e7a3f272"
-    local ARCH URL SHA TMP GOT
-    ARCH="$(uname -m)"
-    case "$ARCH" in
-      x86_64)
-        URL="https://github.com/loft-sh/devpod/releases/download/${DEVPOD_VERSION}/devpod-linux-amd64"
-        SHA="$DEVPOD_SHA256_AMD64"
-        ;;
-      aarch64|arm64)
-        URL="https://github.com/loft-sh/devpod/releases/download/${DEVPOD_VERSION}/devpod-linux-arm64"
-        SHA="$DEVPOD_SHA256_ARM64"
-        ;;
-      armv7l|armhf)
-        echo "ERROR: DevPod publishes no armv7 CLI asset; use x86_64 or aarch64/arm64." >&2
-        exit 1
-        ;;
-      *)
-        echo "ERROR: Unsupported architecture: $ARCH" >&2
-        echo "Supported: x86_64, aarch64/arm64" >&2
-        exit 1
-        ;;
-    esac
-    TMP="$(mktemp)"
-    if ! curl -fsSL -o "$TMP" "$URL"; then
-      rm -f "$TMP"
-      echo "ERROR: could not download $URL" >&2
-      exit 1
-    fi
-    if ! echo "${SHA}  $TMP" | sha256sum -c - >/dev/null; then
-      rm -f "$TMP"
-      echo "ERROR: checksum mismatch for $URL" >&2
-      exit 1
-    fi
-    GOT="$("$TMP" version 2>/dev/null || true)"
-    if [ "$GOT" != "$DEVPOD_VERSION" ]; then
-      rm -f "$TMP"
-      echo "ERROR: devpod binary reports '${GOT:-no version}', expected $DEVPOD_VERSION" >&2
-      exit 1
-    fi
-    if ! sudo install -c -m 0755 "$TMP" /usr/local/bin/devpod; then
-      rm -f "$TMP"
-      echo "ERROR: could not install devpod to /usr/local/bin" >&2
-      exit 1
-    fi
-    rm -f "$TMP"
-    echo "    [ok]   devpod $DEVPOD_VERSION (sha256 verified)"
+DEVPOD_VERSION="v0.6.15"
+DEVPOD_SHA256_AMD64="cc50bce09229d5a6d448ac1d4494327f4b8f7a20321e5fcee3bfec1aef0d20c5"
+DEVPOD_SHA256_ARM64="9226161e0c9f5a45d0f8d1778f940498e787b650f0e0fcf3c29f1f67e7a3f272"
+DEVPOD_INSTALL_PATH="/usr/local/bin/devpod"
+
+# devpod_pin_sha ARCH -> the pinned SHA for that machine architecture
+devpod_pin_sha() {
+  case "$1" in
+    x86_64) echo "$DEVPOD_SHA256_AMD64" ;;
+    aarch64 | arm64) echo "$DEVPOD_SHA256_ARM64" ;;
+    *) return 1 ;;
+  esac
+}
+
+# devpod_pin_url ARCH -> the pinned release asset URL for that architecture
+devpod_pin_url() {
+  case "$1" in
+    x86_64) echo "https://github.com/loft-sh/devpod/releases/download/${DEVPOD_VERSION}/devpod-linux-amd64" ;;
+    aarch64 | arm64) echo "https://github.com/loft-sh/devpod/releases/download/${DEVPOD_VERSION}/devpod-linux-arm64" ;;
+    *) return 1 ;;
+  esac
+}
+
+# install_devpod_asset URL SHA -> download, verify and install the pinned asset
+install_devpod_asset() {
+  local url="$1" sha="$2" tmp got
+  tmp="$(mktemp)"
+  if ! curl -fsSL -o "$tmp" "$url"; then
+    rm -f "$tmp"
+    echo "ERROR: could not download $url" >&2
+    return 1
   fi
+  if ! echo "${sha}  $tmp" | sha256sum -c - >/dev/null; then
+    rm -f "$tmp"
+    echo "ERROR: checksum mismatch for $url" >&2
+    return 1
+  fi
+  got="$("$tmp" version 2>/dev/null || true)"
+  if [ "$got" != "$DEVPOD_VERSION" ]; then
+    rm -f "$tmp"
+    echo "ERROR: devpod binary reports '${got:-no version}', expected $DEVPOD_VERSION" >&2
+    return 1
+  fi
+  if ! sudo install -c -m 0755 "$tmp" "$DEVPOD_INSTALL_PATH"; then
+    rm -f "$tmp"
+    echo "ERROR: could not install devpod to $DEVPOD_INSTALL_PATH" >&2
+    return 1
+  fi
+  rm -f "$tmp"
+}
+
+install_devpod() {
+  local arch sha url existing
+  arch="$(uname -m)"
+  sha="$(devpod_pin_sha "$arch")" || {
+    echo "ERROR: DevPod publishes no CLI asset for $arch; use x86_64 or aarch64/arm64." >&2
+    exit 1
+  }
+  url="$(devpod_pin_url "$arch")"
+  existing="$(command -v devpod 2>/dev/null || true)"
+  if [ -n "$existing" ]; then
+    if [ "$(readlink -f "$existing")" != "$(readlink -f "$DEVPOD_INSTALL_PATH")" ]; then
+      echo "    [warn] devpod at $existing is not the bootstrap's $DEVPOD_INSTALL_PATH; leaving it alone" >&2
+      return 0
+    fi
+    if [ "$(sha256sum "$existing" | awk '{print $1}')" = "$sha" ]; then
+      echo "    [ok]   devpod $DEVPOD_VERSION (sha256 verified)"
+      return 0
+    fi
+    echo "==> devpod at $existing does not match the pinned $DEVPOD_VERSION; replacing..."
+  else
+    echo "==> Installing devpod CLI..."
+  fi
+  if ! install_devpod_asset "$url" "$sha"; then
+    exit 1
+  fi
+  echo "    [ok]   devpod $DEVPOD_VERSION (sha256 verified)"
 }
 
 # ---------- devpod defaults for all workspaces ----------
@@ -564,11 +597,23 @@ install_nerd_font() {
   echo "==> Installing Nerd Font symbols $NF_VERSION (pinned, hash-verified)..."
   local NF_TMP
   NF_TMP="$(mktemp -d)"
-  curl -fsSL -o "$NF_TMP/nf-symbols.tar.xz" \
-    "https://github.com/ryanoasis/nerd-fonts/releases/download/${NF_VERSION}/NerdFontsSymbolsOnly.tar.xz"
-  echo "${NF_SHA256}  $NF_TMP/nf-symbols.tar.xz" | sha256sum -c -
+  if ! curl -fsSL -o "$NF_TMP/nf-symbols.tar.xz" \
+    "https://github.com/ryanoasis/nerd-fonts/releases/download/${NF_VERSION}/NerdFontsSymbolsOnly.tar.xz"; then
+    rm -rf "$NF_TMP"
+    echo "ERROR: could not download the Nerd Font archive" >&2
+    return 1
+  fi
+  if ! echo "${NF_SHA256}  $NF_TMP/nf-symbols.tar.xz" | sha256sum -c - >/dev/null; then
+    rm -rf "$NF_TMP"
+    echo "ERROR: Nerd Font checksum mismatch" >&2
+    return 1
+  fi
   mkdir -p "$NF_DIR" "$HOME/.config/fontconfig/conf.d"
-  tar -xJf "$NF_TMP/nf-symbols.tar.xz" -C "$NF_DIR"
+  if ! tar -xJf "$NF_TMP/nf-symbols.tar.xz" -C "$NF_DIR"; then
+    rm -rf "$NF_TMP"
+    echo "ERROR: could not extract the Nerd Font archive" >&2
+    return 1
+  fi
   ln -sf "$NF_DIR/10-nerd-font-symbols.conf" "$HOME/.config/fontconfig/conf.d/"
   fc-cache -f "$NF_DIR"
   rm -rf "$NF_TMP"
